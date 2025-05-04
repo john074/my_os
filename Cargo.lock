@@ -15,10 +15,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c8214115b7bf84099f1309324e63141d4c5d7cc26862f97a0a857dbefe165bd"
 
 [[package]]
-name = "bootloader"
-version = "0.9.31"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "974e79cf1b0b737839f01330fb5393095daf1124d52693696494e32523ae9ef5"
+name = "compiler_builtins"
+version = "0.1.156"
+source = "git+https://github.com/rust-lang/compiler-builtins?branch=master#fdbefb39d5bb0b95b29b821247044c8aaf436160"
 
 [[package]]
 name = "lazy_static"
@@ -33,10 +32,11 @@ dependencies = [
 name = "my_os"
 version = "0.1.0"
 dependencies = [
- "bootloader",
+ "compiler_builtins",
  "lazy_static",
  "pc-keyboard",
  "pic8259",
+ "rlibc",
  "spin 0.5.2",
  "volatile 0.2.7",
  "x86_64",
@@ -56,6 +56,12 @@ checksum = "cb844b5b01db1e0b17938685738f113bfc903846f18932b378bc0eabfa40e194"
 dependencies = [
  "x86_64",
 ]
+
+[[package]]
+name = "rlibc"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc874b127765f014d792f16763a81245ab80500e2ad921ed4ee9e82481ee08fe"
 
 [[package]]
 name = "rustversion"
