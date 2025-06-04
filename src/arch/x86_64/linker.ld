@@ -1,29 +1,62 @@
 ENTRY(start)
 
-PHYS_OFFSET = 0xffff800000000000;
-
 SECTIONS {
-    . = 1M;
+  . = 1M;
 
-    .boot :
-    {
-        KEEP(*(.multiboot2_header))
-    }
+  .rodata :
+  {
+    /* ensure that the multiboot header is at the beginning */
+    KEEP(*(.multiboot_header))
+    *(.rodata .rodata.*)
+    . = ALIGN(4K);
+  }
 
-    .text :
-    {
-        *(.text)
-    }
+  .text :
+  {
+    *(.text .text.*)
+    . = ALIGN(4K);
+  }
 
-    .rodata :
-    {
-        *(.rodata)
-    }
+  .data :
+  {
+    *(.data .data.*)
+    . = ALIGN(4K);
+  }
 
-    .bss :
-    {
-        *(.bss COMMON)
-    }
+  .bss :
+  {
+    *(.bss .bss.*)
+    . = ALIGN(4K);
+  }
 
-    /DISCARD/ : { *(.eh_frame) }
+  .got :
+  {
+    *(.got)
+    . = ALIGN(4K);
+  }
+
+  .got.plt :
+  {
+    *(.got.plt)
+    . = ALIGN(4K);
+  }
+
+  .data.rel.ro : ALIGN(4K) {
+    *(.data.rel.ro.local*) *(.data.rel.ro .data.rel.ro.*)
+    . = ALIGN(4K);
+  }
+
+  .gcc_except_table : ALIGN(4K) {
+    *(.gcc_except_table)
+    . = ALIGN(4K);
+  }
+
+  /DISCARD/ : {
+    *(.eh_frame .eh_frame_hdr)
+    *(.note .note.*)
+    *(.comment)
+    *(.debug*)
+  }
+  
+  
 }
