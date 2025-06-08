@@ -169,8 +169,7 @@ impl fmt::Write for Writer {
 	}
 }
 
-pub fn rm_char()
-{
+pub fn rm_char() {
 	WRITER.lock().rm_char();
 }
 
@@ -193,4 +192,10 @@ pub fn _print(args: fmt::Arguments) {
 	interrupts::without_interrupts(|| {
 		WRITER.lock().write_fmt(args).unwrap();		
 	});
+}
+
+pub fn clear_screen() {
+	for _ in 0..BUFFER_HEIGHT {
+		println!("");
+	}
 }

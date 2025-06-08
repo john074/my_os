@@ -1,12 +1,22 @@
-use multiboot2::{ MemoryArea, BootInformation, ElfSection, ElfSectionFlags };
+use multiboot2::{ MemoryArea, BootInformation, ElfSection,  BootInformationHeader };
 use core::ops::{ Index, IndexMut, Deref, DerefMut };
 use core::marker::PhantomData;
-use core::ptr::Unique;
+use core::ptr::{ Unique, self,  null_mut };
+use core::cell::UnsafeCell;
+use core::mem;
+use alloc::alloc::{ GlobalAlloc, Layout };
+use crate::cpu::{ cr3, write_raw_cr3 }; 
 use crate::println;
 
 pub const PAGE_SIZE: usize = 4096;
 pub const ENTRY_COUNT: usize = 512;
 pub const P4: *mut Table<Level4> = 0xffffffff_fffff000 as *mut _; 
+pub const HEAP_START: usize = 0x_4444_4444_0000;
+pub const HEAP_SIZE: usize = 100 * 1024;
+const BLOCK_SIZES: &[usize] = &[8, 16, 32, 64, 128, 256, 512, 1024, 2048];
+
+#[global_allocator]
+static ALLOCATOR: Locked<FixedSizeBlockAllocator> = Locked::new(FixedSizeBlockAllocator::new());
 
 pub type PhysicalAddress = usize;
 pub type VirtualAddress = usize;
@@ -61,6 +71,38 @@ impl EntryFlags {
 		flags
 	}
 }
+
+pub fn init(multiboot_information_address: usize) {
+	let boot_info = unsafe{ BootInformation::load(multiboot_information_address as *const BootInformationHeader).unwrap() };
+	
+	let memory_map_tag = boot_info.memory_map_tag().expect("Memory map tag required");
+	 	
+	let elf_sections_tag = boot_info.elf_sections().expect("Elf-sections tag required");
+	let kernel_start = elf_sections_tag.map(|s| s.start_address()).min().unwrap();
+	
+	let elf_sections_tag = boot_info.elf_sections().expect("Elf-sections tag required");
+	let kernel_end = elf_sections_tag.map(|s| s.start_address()).max().unwrap();
+	println!("Kernel start: {:#x}, kernel end: {:#x}", kernel_start, kernel_end);
+		
+	let multiboot_start = multiboot_information_address;
+	let multiboot_end = multiboot_start + (boot_info.total_size());
+	
+	let mut frame_allocator = AreaFrameAllocator::new(kernel_start as usize, kernel_end as usize, multiboot_start, multiboot_end, memory_map_tag.memory_areas());
+	let mut active_table = remap_kernel(&mut frame_allocator, &boot_info);
+
+	let heap_start_page = Page::containing_address(HEAP_START);
+	let heap_end_page = Page::containing_address(HEAP_START + HEAP_SIZE - 1);
+
+	for page in Page::range_inclusive(heap_start_page, heap_end_page) {
+		active_table.map(page, WRITABLE, &mut frame_allocator);
+	}
+
+	unsafe {
+		ALLOCATOR.lock().init(HEAP_START, HEAP_SIZE);
+	}
+	println!("Memory initialization\t[OK]");
+}
+
 
 //******* Frame Allocator *******\\
 
@@ -193,7 +235,7 @@ impl<'a> AreaFrameAllocator<'a> {
 
 //******* PAGING *******\\
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Page {
 	number: usize,
 }
@@ -202,6 +244,13 @@ impl Page {
 	pub fn containing_address(address: VirtualAddress) -> Page {
 		assert!(address < 0x0000_8000_0000_0000 || address >= 0xffff_8000_0000_0000, "invalid address 0x{:x}", address);
 		Page { number: address / PAGE_SIZE }
+	}
+
+	pub fn range_inclusive(start: Page, end: Page) -> PageIter {
+		PageIter {
+			start: start,
+			end: end
+		}
 	}
 
 	fn start_address(&self) -> usize {
@@ -222,6 +271,25 @@ impl Page {
 
 	fn p1_index(&self) -> usize {
 		(self.number) & 0o777
+	}
+}
+
+pub struct PageIter {
+	start: Page,
+	end: Page,
+}
+
+impl Iterator for PageIter {
+	type Item = Page;
+
+	fn next(&mut self) -> Option<Page> {
+		if self.start <= self.end {
+			let page = self.start;
+			self.start.number += 1;
+			Some(page)
+		} else {
+			None
+		}
 	}
 }
 
@@ -554,32 +622,20 @@ impl ActivePageTable {
 	}
 
 	pub fn switch(&mut self, new_table: InactivePageTable) -> InactivePageTable {
-		use x86_64::PhysAddr;
-		use x86_64::registers::control;
-		use x86_64::structures::paging::PhysFrame;
-
-		let (_, cr3_address) = control::Cr3::read_raw();
 		let old_table = InactivePageTable {
-			p4_frame: Frame::containing_address(cr3_address as usize),
+			p4_frame: Frame::containing_address(cr3() as usize),
 		};
 
 		unsafe {
-			ActivePageTable::write_raw_cr3(new_table.p4_frame.start_address() as u64);
+			write_raw_cr3(new_table.p4_frame.start_address() as u64);
 		}
 
 		old_table
 	}
-
-	#[inline]
-	unsafe fn write_raw_cr3(address: u64) {
-		use core::arch::asm;
-		unsafe {
-			asm!("mov cr3, {}", in(reg) address, options(nostack, nomem, preserves_flags));
-		}
-	}
 }
 
-pub fn remap_kernel<A>(allocator: &mut A, boot_info: &BootInformation) where A: FrameAllocator {
+pub fn remap_kernel<A>(allocator: &mut A, boot_info: &BootInformation) -> ActivePageTable where A: FrameAllocator {
+	println!("Remapping kernel.");
 	let mut temporary_page = TemporaryPage::new(Page { number: 0x123456789 }, allocator);
 	let mut active_table = unsafe { ActivePageTable::new() };
 	let mut new_table = {
@@ -596,11 +652,11 @@ pub fn remap_kernel<A>(allocator: &mut A, boot_info: &BootInformation) where A: 
 			}
 
 			if section.start_address() as usize % PAGE_SIZE != 0 {
-			    //println!("skipping non-page-aligned section at addr: {:#x}, size: {:#x}", section.start_address(), section.size());
+			    println!("Skipping non-page-aligned section at address: {:#x}, size: {:#x}", section.start_address(), section.size());
 			    continue;
 			}
 			
-			//println!("mapping section at addr: {:#x}, size: {:#x}", section.start_address(), section.size());
+			println!("Mapping section at address: {:#x}, size: {:#x}", section.start_address(), section.size());
 			//assert!(section.start_address() as usize % PAGE_SIZE == 0, "sections need to be page aligned");
 
 			let flags = EntryFlags::from_elf_section_flags(&section);
@@ -623,10 +679,272 @@ pub fn remap_kernel<A>(allocator: &mut A, boot_info: &BootInformation) where A: 
 	});
 
 	let old_table = active_table.switch(new_table);
-	println!("NEW TABLE!");
+	println!("Page table successfuly swaped.");
 
 	let old_p4_page = Page::containing_address(old_table.p4_frame.start_address());
 	active_table.unmap(old_p4_page, allocator);
-	println!("guard page at {:#x}", old_p4_page.start_address());
+	println!("Guard page at {:#x}.", old_p4_page.start_address());
+
+	active_table
 }
 
+//Allocator
+
+pub struct Locked<A> {
+	inner: spin::Mutex<A>
+}
+
+impl<A> Locked<A> {
+	pub const fn new(inner: A) -> Self {
+		Locked {
+			inner: spin::Mutex::new(inner)
+		}
+	}
+
+	pub fn lock(&self) -> spin::MutexGuard<A> {
+		self.inner.lock()
+	}
+}
+
+struct FixedSizeListNode {
+	next: Option<&'static mut FixedSizeListNode>
+}
+
+pub struct FixedSizeBlockAllocator {
+	list_heads: [Option<&'static mut FixedSizeListNode>; BLOCK_SIZES.len()],
+	//fallback_allocator: BumpAllocator
+	fallback_allocator: Locked<LinkedListAllocator>
+}
+
+impl FixedSizeBlockAllocator {
+	pub const fn new() -> Self {
+		const EMPTY: Option<&'static mut FixedSizeListNode> = None;
+		FixedSizeBlockAllocator {
+			list_heads: [EMPTY; BLOCK_SIZES.len()],
+			fallback_allocator: Locked::new(LinkedListAllocator::new())
+		// 	fallback_allocator: BumpAllocator {
+		// 		heap_start: 0x_4444_4444_0000,
+		// 		heap_end: 0x_4444_4444_0000 + 100 * 1024,
+		// 		next: UnsafeCell::new(0x_4444_4444_0000),	
+		// 	}
+		}
+		
+	}
+
+	// pub unsafe fn init(&mut self) {
+	// 	for (i, &block_size) in BLOCK_SIZES.iter().enumerate() {
+	//     	let layout = Layout::from_size_align(block_size, block_size).unwrap();
+	//     	let ptr = self.fallback_allocator.alloc(layout);
+	//     	if !ptr.is_null() {
+	//    			let node_ptr = ptr as *mut FixedSizeListNode;
+	//         	node_ptr.write(FixedSizeListNode { next: None });
+	//         	self.list_heads[i] = Some(&mut *node_ptr);
+	//     	}
+	// 	}
+	// }
+
+	pub unsafe fn init(&mut self, heap_start: usize, heap_size: usize) {
+		unsafe {
+			self.fallback_allocator.lock().init(heap_start, heap_size);
+		}
+	} 
+}
+
+fn list_index(layout: &Layout) -> Option<usize> {
+	let required_block_size = layout.size().max(layout.align());
+	BLOCK_SIZES.iter().position(|&s| s >= required_block_size)
+}
+
+unsafe impl GlobalAlloc for Locked<FixedSizeBlockAllocator> {
+	unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+		let mut allocator = self.lock();
+		match list_index(&layout) {
+			Some(index) => {
+				match allocator.list_heads[index].take() {
+					Some(node) => {
+						allocator.list_heads[index] = node.next.take();
+						node as *mut FixedSizeListNode as *mut u8
+					}
+					None => {
+						let block_size = BLOCK_SIZES[index];
+						let block_align = block_size;
+						let layout = Layout::from_size_align(block_size, block_align).unwrap();
+						allocator.fallback_allocator.alloc(layout)
+					}
+				}
+			}
+			None => allocator.fallback_allocator.alloc(layout)
+		}
+	}
+
+	unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+		let mut allocator = self.lock();
+		match list_index(&layout) {
+			Some(index) => {
+				let new_node = FixedSizeListNode {
+					next: allocator.list_heads[index].take()
+				};
+				assert!(mem::size_of::<FixedSizeListNode>() <= BLOCK_SIZES[index]);
+				assert!(mem::align_of::<FixedSizeListNode>() <= BLOCK_SIZES[index]);
+				let new_node_ptr = ptr as *mut FixedSizeListNode;
+				unsafe {
+					new_node_ptr.write(new_node);
+					allocator.list_heads[index] = Some(&mut *new_node_ptr);
+				}
+			}
+			None => {
+				//let ptr = NonNull::new(ptr).unwrap();
+				//unimplemented!()
+				allocator.fallback_allocator.dealloc(ptr, layout);
+			}
+		}
+	}
+}
+
+struct VarSizeListNode {
+	size: usize,
+	next: Option<&'static mut VarSizeListNode>
+}
+
+impl VarSizeListNode {
+	const fn new(size: usize) -> Self {
+		VarSizeListNode { size, next: None }
+	}
+
+	fn start_addr(&self) -> usize {
+		self as *const Self as usize
+	}
+
+	fn end_addr(&self) -> usize {
+		self.start_addr() + self.size
+	}
+}
+
+pub struct LinkedListAllocator {
+	head: VarSizeListNode,
+}
+
+impl LinkedListAllocator {
+	pub const fn new() -> Self {
+		Self {
+			head: VarSizeListNode::new(0),
+		}
+	}
+
+	pub unsafe fn init(&mut self, heap_start: usize, heap_size: usize) {
+		unsafe {
+			self.add_free_region(heap_start, heap_size);
+		}
+	}
+
+	unsafe fn add_free_region(&mut self, addr: usize, size: usize) {
+		assert_eq!(align_up(addr, mem::align_of::<VarSizeListNode>()), addr);
+		assert!(size >= mem::size_of::<VarSizeListNode>());
+
+		let mut node = VarSizeListNode::new(size);
+		node.next = self.head.next.take();
+		let node_ptr = addr as *mut VarSizeListNode;
+		unsafe {
+			node_ptr.write(node);
+			self.head.next = Some(&mut *node_ptr);
+		}
+	}
+
+	fn find_region(&mut self, size: usize, align: usize) -> Option<(&'static mut VarSizeListNode, usize)> {
+		let mut current = &mut self.head;
+
+		while let Some(ref mut region) = current.next {
+			if let Ok(alloc_start) = Self::alloc_from_region(&region, size, align) {
+				let next = region.next.take();
+				let ret = Some((current.next.take().unwrap(), alloc_start));
+				current.next = next;
+				return ret;
+			} else {
+				current = current.next.as_mut().unwrap();
+			}
+		}
+		None
+	}
+
+	fn alloc_from_region(region: &VarSizeListNode, size: usize, align: usize) -> Result<usize, ()> {
+		let alloc_start = align_up(region.start_addr(), align);
+		let alloc_end = alloc_start.checked_add(size).ok_or(())?;
+
+		
+		if alloc_end > region.end_addr() {
+			return Err(());
+		}
+		
+		let excess_size = region.end_addr() - alloc_end;
+		if excess_size > 0 && excess_size < mem::size_of::<VarSizeListNode>() {
+			return Err(());
+		}
+
+		Ok(alloc_start)
+	}
+
+	fn size_align(layout: Layout) -> (usize, usize) {
+		let layout = layout.align_to(mem::align_of::<VarSizeListNode>()).expect("failed to adjust aligment").pad_to_align();
+		let size = layout.size().max(mem::size_of::<VarSizeListNode>());
+		(size, layout.align())
+	}
+}
+
+unsafe impl GlobalAlloc for Locked<LinkedListAllocator> {
+	unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+		let (size, align) = LinkedListAllocator::size_align(layout);
+		let mut allocator = self.lock();
+		if let Some((region, alloc_start)) = allocator.find_region(size, align) {
+			let alloc_end = alloc_start.checked_add(size).expect("overflow");
+			let excess_size = region.end_addr() - alloc_end;
+			if excess_size > 0 {
+				unsafe {
+					allocator.add_free_region(alloc_end, excess_size);
+				}
+			}
+			alloc_start as *mut u8
+		} else {
+			ptr::null_mut()
+		}
+	}
+
+	unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+		println!("...");
+		let (size, _) = LinkedListAllocator::size_align(layout);
+		unsafe {
+			self.lock().add_free_region(ptr as usize, size)
+		}
+	}
+}
+
+struct BumpAllocator {
+	heap_start: usize,
+	heap_end: usize,
+	next: UnsafeCell<usize>,
+}
+
+unsafe impl GlobalAlloc for BumpAllocator {
+	unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+		let current = *self.next.get();
+		let alloc_start = align_up(current, layout.align());
+		let alloc_end = alloc_start.saturating_add(layout.size());
+
+		if alloc_end > self.heap_end {
+			null_mut()
+		}
+		else {
+			*self.next.get() = alloc_end;
+			alloc_start as *mut u8
+		}
+	}
+
+	unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {
+		// wasnt a part of the deal
+	}
+}
+
+unsafe impl Sync for BumpAllocator {}
+
+fn align_up(addr: usize, align: usize) -> usize {
+	(addr + align - 1) & !(align - 1)
+}

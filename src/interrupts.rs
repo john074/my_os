@@ -1,7 +1,6 @@
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
-use spin;
 
 use crate::vga_buffer;
 use crate::println;
@@ -46,8 +45,15 @@ lazy_static! {
 	};		
 }
 
-pub fn init_idt() {
+pub fn init() {
 	IDT.load();
+	println!("Interrupt descriptor table is set.");
+	gdt::init();
+	println!("Global descriptor table is initialized");
+	unsafe { PICS.lock().initialize(); }
+	println!("Programmable interrupt controller is initialized.");
+	x86_64::instructions::interrupts::enable();
+	println!("Interrupts initialization\t[OK]");
 }
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
