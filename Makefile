@@ -23,8 +23,16 @@ iso:
 	grub-mkrescue -o $(ISO_IMAGE) iso
 
 run:
-	qemu-system-x86_64 -cdrom $(ISO_IMAGE) -serial stdio
-
+	qemu-system-x86_64 \
+  -drive file=boot.iso,format=raw,media=cdrom \
+  -drive file=fat12.img,format=raw,if=ide,index=1,media=disk \
+  -boot order=d \
+  -serial stdio \
+  -machine pc \
+  #-D qemu.log -d int,cpu,exec \
+	    
+	  
+	
 clean:
 	cargo clean
 	rm -f $(KERNEL) $(ISO_IMAGE)

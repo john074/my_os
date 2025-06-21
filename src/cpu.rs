@@ -61,6 +61,44 @@ pub fn hlt() {
 	}
 }
 
+pub fn enable_interrupts() {
+	unsafe {
+		asm!("sti", options(nomem, nostack));
+	}
+}
+
+pub fn disable_interrupts() {
+	unsafe {
+		asm!("cli", options(nomem, nostack));
+	}
+}
+
+pub fn set_iopl() {
+	unsafe {
+	    let mut flags: u64;
+	    asm!(
+	        "pushfq",
+	        "pop {}",
+	        out(reg) flags,
+	    );
+	    flags |= 0b11 << 12; // IOPL = 3
+	    asm!(
+	        "push {}",
+	        "popfq",
+	        in(reg) flags,
+	    );
+	}
+}
+
+use crate::println;
+pub fn check_cpl() {
+    unsafe {
+        let cs: u16;
+        asm!("mov {}, cs", out(reg) cs);
+        println!("Current privilege level: {}", cs & 0b11);
+    }
+}
+
 pub fn enable_nxe_bit() {
 	const IA32_EFER: u32 = 3221225600;
 	let nxe_bit = 1 << 11;

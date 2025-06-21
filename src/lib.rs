@@ -13,48 +13,63 @@ mod memory;
 mod cpu;
 mod time;
 mod std;
+mod multitasking;
+mod keyboard;
+mod fs;
 
 #[macro_use]
 extern crate bitflags;
-
-#[macro_use]
 extern crate alloc;
 
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	vga_buffer::WRITER.lock().set_foreground_color(vga_buffer::Color::Green);
-
 	interrupts::init();
-	time::sleep(1000);
+	//time::sleep(1000);
 	cpu::enable_nxe_bit();
 	cpu::enable_write_protect_bit();
 	memory::init(multiboot_information_address);
-	time::sleep(2000);
+	//time::sleep(2000);
 	vga_buffer::clear_screen();
 
-	println!("*");
-
-	let mut heap_t = alloc::boxed::Box::new(42);
-	let heap_test2 = alloc::boxed::Box::new("Hellow");
-	let mut vec_test = vec![1, 2, 3, 4, 5];
-	*heap_t -= 15;
-	vec_test[3] = 42;
-
-	for i in 0..100 {
-		alloc::boxed::Box::new(42);
-		alloc::boxed::Box::new(42000);
-	}
-
-	for i in 0..10000 {
-		format!("Some string!");
-	}
-
-	println!("{:?}, {:?}", heap_t, heap_test2);
-	
+	let mut executor = multitasking::Executor::new();
+	//executor.spawn(multitasking::Task::new(print_a()));
+	//executor.spawn(multitasking::Task::new(print_b()));
+	executor.spawn(multitasking::Task::new(keyboard::print_keypresses()));
+	executor.spawn(multitasking::Task::new(cfs()));
 	print!("Hello World!\n>");
+	executor.run();
+}
+
+async fn print_a() {
+	loop {
+		print!("a");
+		multitasking::cooperate().await;
+		time::sleep(1000);
+	}
+}
+
+async fn print_b() {
+	loop {
+		print!("b");
+		multitasking::cooperate().await;
+		time::sleep(1000);
+	}
+}
+
+async fn cfs() {
+	let mut ata = fs::AtaDevice::new();
+	let mut fs = fs::Fat12Fs::new(ata);
 	
-	hlt_loop();
+	let name = *b"HELLO   TXT";
+	let mut buffer = [0u8; 512];
+	
+	if let Some(len) = fs.read_file(&name, &mut buffer) {
+	    print!("Read file: {}\n", core::str::from_utf8(&buffer[..len]).unwrap());
+	} else {
+	    print!("File not found\n");
+	}
 }
 
 pub fn hlt_loop() -> ! {
@@ -62,6 +77,7 @@ pub fn hlt_loop() -> ! {
 		cpu::hlt();
 	}
 }
+
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {

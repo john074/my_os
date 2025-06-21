@@ -1,16 +1,17 @@
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
+use spin::Mutex;
 
 use crate::vga_buffer;
 use crate::println;
-use crate::print;
 use crate::gdt;
+use crate::keyboard;
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 
-pub static PICS: spin::Mutex<ChainedPics> = spin::Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
+pub static PICS: Mutex<ChainedPics> = Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
 
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
@@ -29,22 +30,6 @@ impl InterruptIndex {
 	}
 }
 
-
-lazy_static! {
-	static ref IDT: InterruptDescriptorTable = {
-		let mut idt = InterruptDescriptorTable::new();
-		idt.breakpoint.set_handler_fn(breakpoint_handler);
-		idt.page_fault.set_handler_fn(page_fault_handler);
-		unsafe {
-			idt.double_fault.set_handler_fn(double_fault_handler)
-				.set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
-		}
-		idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer_interrupt_handler);
-		idt[InterruptIndex::Keyboard.as_usize()].set_handler_fn(keyboard_interrupt_handler);
-		idt
-	};		
-}
-
 pub fn init() {
 	IDT.load();
 	println!("Interrupt descriptor table is set.");
@@ -56,6 +41,30 @@ pub fn init() {
 	println!("Interrupts initialization\t[OK]");
 }
 
+lazy_static! {
+	static ref IRQ_HANDLERS: Mutex<[fn(); 16]> = {
+		Mutex::new([default_handler; 16])
+	};
+	
+	static ref IDT: InterruptDescriptorTable = {
+		let mut idt = InterruptDescriptorTable::new();
+		idt.breakpoint.set_handler_fn(breakpoint_handler);
+		idt.page_fault.set_handler_fn(page_fault_handler);
+		unsafe {
+			idt.double_fault.set_handler_fn(double_fault_handler).set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
+			idt.general_protection_fault.set_handler_fn(general_protection_fault_handler).set_stack_index(gdt::GENERAL_PROTECTION_FAULT_IST_INDEX);
+		}
+		idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer_interrupt_handler);
+		idt[InterruptIndex::Keyboard.as_usize()].set_handler_fn(keyboard_interrupt_handler);
+
+		idt[(PIC_1_OFFSET + 14) as usize].set_handler_fn(irq14_handler);
+		
+		idt
+	};		
+}
+
+fn default_handler() {}
+
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
 	unsafe {
 		PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
@@ -63,40 +72,19 @@ extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFr
 }
 
 extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStackFrame) {
-	use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
 	use x86_64::instructions::port::Port;
-	use spin::Mutex;
-
-	lazy_static! {
-		static ref KEYBOARD: Mutex<Keyboard<layouts::Us104Key, ScancodeSet1>> = 
-			Mutex::new(Keyboard::new(ScancodeSet1::new(), layouts::Us104Key, HandleControl::Ignore));
-	}
-
-	let mut keyboard = KEYBOARD.lock();
+	
 	let mut port = Port::new(0x60);
-
 	let scancode: u8 = unsafe { port.read() };
-
-	if scancode == 0x0E {
-		vga_buffer::rm_char();
-	}
-	else if scancode == 0x1C {
-		print!("\n>");
-	}
-	else {
-		if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
-			if let Some(key) = keyboard.process_keyevent(key_event) {
-				match key {
-					DecodedKey::Unicode(character) => print!("{}", character),
-					DecodedKey::RawKey(key) => print!(""),
-				}
-			}
-		}
-	}
+	keyboard::add_scancode(scancode);
 
 	unsafe {
 		PICS.lock().notify_end_of_interrupt(InterruptIndex::Keyboard.as_u8());
 	}
+}
+
+extern "x86-interrupt" fn general_protection_fault_handler(_stack_frame: InterruptStackFrame, _error_code: u64) {
+    println!("General Protection Fault!");
 }
 
 extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> ! {
@@ -113,3 +101,19 @@ extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
 	println!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
 	vga_buffer::WRITER.lock().set_foreground_color(vga_buffer::Color::Green);
 }
+
+macro_rules! irq_handler {
+    ($handler:ident, $irq:expr) => {
+        pub extern "x86-interrupt" fn $handler(_: InterruptStackFrame) {
+            let handlers = IRQ_HANDLERS.lock();
+            handlers[$irq]();
+            unsafe {
+                PICS.lock().notify_end_of_interrupt(
+                    (PIC_1_OFFSET + $irq) as u8
+                );
+            }
+        }
+    };
+}
+
+irq_handler!(irq14_handler, 14);
