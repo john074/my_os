@@ -14,7 +14,7 @@ panic = "abort"
 
 [dependencies]
 volatile = "0.2.6"
-spin = "0.5.2"
+spin = "0.10.0"
 x86_64 = "0.14.2"
 pic8259 = "0.10.1"
 pc-keyboard = "0.7.0"
@@ -22,6 +22,7 @@ rlibc = "1.0"
 multiboot2 = "0.22.0"
 bitflags = "0.9.1"
 x86 = "0.52.0"
+xmas-elf = "0.9.1"
 
 [dependencies.lazy_static]
 version = "1.0"

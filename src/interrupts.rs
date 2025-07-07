@@ -58,6 +58,8 @@ lazy_static! {
 		idt[InterruptIndex::Keyboard.as_usize()].set_handler_fn(keyboard_interrupt_handler);
 
 		idt[(PIC_1_OFFSET + 14) as usize].set_handler_fn(irq14_handler);
+
+		idt[0x80].set_handler_fn(syscall_interrupt_handler);
 		
 		idt
 	};		
@@ -83,12 +85,34 @@ extern "x86-interrupt" fn keyboard_interrupt_handler(_stack_frame: InterruptStac
 	}
 }
 
-extern "x86-interrupt" fn general_protection_fault_handler(_stack_frame: InterruptStackFrame, _error_code: u64) {
-    println!("General Protection Fault!");
+extern "x86-interrupt" fn general_protection_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) {
+    panic!("EXCEPTION: GENERAL PROTECTION FAULT\n{:#?}", stack_frame);
 }
 
 extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> ! {
 	panic!("EXCEPTION: DOUBLE FAULT\n{:#?}", stack_frame);
+}
+
+extern "x86-interrupt" fn syscall_interrupt_handler(stack_frame: InterruptStackFrame) {
+	let n: u64;
+    let a1: u64;
+    let a2: u64;
+    let a3: u64;
+
+    unsafe {
+        core::arch::asm!(
+            "mov {}, rax",
+            "mov {}, rdi",
+            "mov {}, rsi",
+            "mov {}, rdx",
+            out(reg) n,
+            out(reg) a1,
+            out(reg) a2,
+            out(reg) a3,
+        );
+    }
+
+    syscall_handler(n, a1, a2, a3);
 }
 
 extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, error_code: PageFaultErrorCode) {
@@ -114,6 +138,75 @@ macro_rules! irq_handler {
             }
         }
     };
+}
+
+#[naked]
+#[unsafe(no_mangle)]
+pub extern "C" fn _syscall_interrupt_handler() {
+    unsafe {
+        core::arch::naked_asm!(
+            "mov r12, rax", // syscall number
+            "mov r13, rdi", //arg1
+            "mov r14, rsi", //arg2
+            "mov r15, rdx", //arg3
+
+            "push r10",
+            "push r11",
+            "push rbp",
+            "push rbx",
+            "push r9",
+            "push r8",
+
+            "mov rdi, r12",
+            "mov rsi, r13",
+            "mov rdx, r14",
+            "mov rcx, r15",
+
+            "call syscall_handler",
+
+            "pop r8",
+            "pop r9",
+            "pop rbx",
+            "pop rbp",
+            "pop r11",
+            "pop r10",
+
+            "iretq",
+            options()
+        );
+    }
+}
+
+#[unsafe(no_mangle)]
+pub fn syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64 {
+	println!("SYSCALL n={} arg1={:#x} arg2={} arg3={:#x}", number, arg1, arg2, arg3);
+	let ret;
+	match number {
+		1 => { // SYS_WRITE
+			let ptr = arg1 as *const u8;
+			let len = arg2 as usize;
+			let s = unsafe { core::slice::from_raw_parts(ptr, len) };
+			if let Ok(text) = core::str::from_utf8(s) {
+				println!("{}", text);
+			}
+			ret = 0;
+		}
+		_ => {
+			println!("Unknown syscall: {}", number);
+			ret = -1i64 as u64;
+		}
+	}
+
+	unsafe {
+		core::arch::asm!("mov rax, {}", in(reg) ret, options(preserves_flags));
+	}
+
+	ret
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn print_cs_ss(cs: u64, ss: u64) {
+    println!(">>> CS: {:#x}, SS: {:#x}", cs, ss);
 }
 
 irq_handler!(irq14_handler, 14);

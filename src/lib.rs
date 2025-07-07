@@ -2,6 +2,7 @@
 #![no_main]
 #![feature(abi_x86_interrupt)]
 #![feature(ptr_internals)]
+#![feature(naked_functions)]
 
 use core::panic::PanicInfo;
 
@@ -30,6 +31,10 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	cpu::enable_nxe_bit();
 	cpu::enable_write_protect_bit();
 	memory::init(multiboot_information_address);
+	// unsafe{
+	// 	cpu::init_syscall(interrupts::syscall_interrupt_handler as u64);	
+	// }
+	
 	//time::sleep(2000);
 	vga_buffer::clear_screen();
 
@@ -61,15 +66,52 @@ async fn print_b() {
 async fn cfs() {
 	let mut ata = fs::AtaDevice::new();
 	let mut fs = fs::Fat12Fs::new(ata);
+
+	let mut program_buf = [0u8; 8192];
+	let size = fs.read_file(b"APP        ", &mut program_buf).unwrap();
+	fs::load_elf_and_jump(&program_buf[..size]);
 	
-	let name = *b"HELLO   TXT";
+	//tfs(fs).await;
+}
+
+async fn tfs<D: fs::BlockDevice>(mut fs: fs::Fat12Fs<D>) {
+	let filename = *b"TEST2   TXT";
+	let contents = b"Hello from Rust!\n";
+	fs.write_file(&filename, contents);
+
+	println!("file 'TEST2.TXT' created");
+	println!("All files:");
+	fs.list_files();
+
+	fs.delete_file(b"TEST    TXT");
+	println!("file 'TEST.TXT' deleted");
+	println!("All files:");
+	fs.list_files();
+	
+	let mut name = *b"HELLO   TXT";
 	let mut buffer = [0u8; 512];
 	
 	if let Some(len) = fs.read_file(&name, &mut buffer) {
-	    print!("Read file: {}\n", core::str::from_utf8(&buffer[..len]).unwrap());
+	    print!("Read file 'HELLO.TXT': {}\n", core::str::from_utf8(&buffer[..len]).unwrap());
 	} else {
 	    print!("File not found\n");
 	}
+
+	name = *b"TEST    TXT";
+	
+	if let Some(len) = fs.read_file(&name, &mut buffer) {
+		print!("Read file 'TEST.TXT': {}\n", core::str::from_utf8(&buffer[..len]).unwrap());
+	} else {
+	    print!("File not found\n");
+	}
+
+	name = *b"TEST2   TXT";
+		
+	if let Some(len) = fs.read_file(&name, &mut buffer) {
+		print!("Read file 'TEST2.TXT': {}\n", core::str::from_utf8(&buffer[..len]).unwrap());
+	} else {
+	    print!("File not found\n");
+	}	
 }
 
 pub fn hlt_loop() -> ! {

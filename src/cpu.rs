@@ -1,4 +1,10 @@
 use core::arch::asm;
+//use crate::gdt;
+
+// const IA32_EFER: u32 = 0xC0000080;
+// const IA32_STAR: u32 = 0xC0000081;
+// const IA32_LSTAR: u32 = 0xC0000082;
+// const IA32_FMASK: u32 = 0xC0000084;
 
 pub unsafe fn wrmsr(msr: u32, value: u64) {
 	let low = value as u32;
@@ -73,29 +79,11 @@ pub fn disable_interrupts() {
 	}
 }
 
-pub fn set_iopl() {
-	unsafe {
-	    let mut flags: u64;
-	    asm!(
-	        "pushfq",
-	        "pop {}",
-	        out(reg) flags,
-	    );
-	    flags |= 0b11 << 12; // IOPL = 3
-	    asm!(
-	        "push {}",
-	        "popfq",
-	        in(reg) flags,
-	    );
-	}
-}
-
-use crate::println;
-pub fn check_cpl() {
+pub fn check_cpl() -> u16 {
     unsafe {
         let cs: u16;
         asm!("mov {}, cs", out(reg) cs);
-        println!("Current privilege level: {}", cs & 0b11);
+        cs
     }
 }
 
@@ -112,3 +100,23 @@ pub fn enable_write_protect_bit() {
 	const CR0_WRITE_PROTECT: usize = 1 << 16;
 	unsafe { cr0_write(cr0() | CR0_WRITE_PROTECT)};
 }
+
+// pub unsafe fn init_syscall(syscall_entry: u64) {
+//     // Turn on SCE bit (System Call Extensions) in EFER
+//     let mut efer = rdmsr(IA32_EFER);
+//     efer |= 1; // EFER.SCE = 1
+//     wrmsr(IA32_EFER, efer);
+// 
+//     let user_cs: u64 = gdt::GDT.1.user_code_selector.0 as u64;
+//     let kernel_cs: u64 = gdt::GDT.1.code_selector.0 as u64;
+//     let star = (user_cs << 48) | (kernel_cs << 32);
+//     wrmsr(IA32_STAR, star);
+// 
+//     // Set RFLAGS mask
+//     let rflags_mask: u64 = 1 << 9; // IF
+//     wrmsr(IA32_FMASK, rflags_mask);
+// 
+//     // Set syscall handler address
+//     wrmsr(IA32_LSTAR, syscall_entry);
+// }
+
