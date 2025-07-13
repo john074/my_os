@@ -4,8 +4,18 @@ use xmas_elf::program::Type;
 use core::ptr::copy_nonoverlapping;
 
 use crate::println;
+use crate::multitasking;
+use crate::cpu;
 
-pub fn load_elf_and_jump(elf_data: &[u8]) {
+pub static mut RETURN_ADDR: usize = 0;
+pub static mut COOP_ADDR: usize = 0;
+pub static mut EXECUTOR_PTR: *mut multitasking::Executor = core::ptr::null_mut();
+
+pub fn load_elf_and_jump(elf_data: &[u8], executor: *mut multitasking::Executor) {
+	unsafe{
+		EXECUTOR_PTR = executor;
+	};
+	
     let elf = ElfFile::new(elf_data).expect("Invalid ELF");
 
     for ph in elf.program_iter() {
@@ -27,10 +37,21 @@ pub fn load_elf_and_jump(elf_data: &[u8]) {
         }
     }
 
-    let entry = elf.header.pt2.entry_point() as usize;
-    //println!("Jumping to entry point at {:#x}", entry);
-    let entry_fn: extern "C" fn() -> ! = unsafe { core::mem::transmute(entry) };
-    entry_fn()
+	let entry = elf.header.pt2.entry_point() as usize;
+	unsafe {
+	    RETURN_ADDR = return_to_kernel as usize;
+	    core::arch::asm!(
+	        "mov rax, {0}", // entry point
+	        "jmp rax",
+	        in(reg) entry,
+	        options(noreturn)
+	    );
+	}
+}
+
+extern "C" fn return_to_kernel() {
+	let executor = unsafe { &mut *EXECUTOR_PTR };
+    executor.run();
 }
 
 

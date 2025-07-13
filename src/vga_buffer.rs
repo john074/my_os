@@ -184,6 +184,22 @@ macro_rules! println {
 	($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
 }
 
+#[macro_export]
+macro_rules! debug {
+	($($arg:tt)*) => {{
+		use core::fmt::Write;
+		use x86_64::instructions::interrupts;
+
+		interrupts::without_interrupts(|| {
+			let mut writer = $crate::vga_buffer::WRITER.lock();
+			writer.set_foreground_color($crate::vga_buffer::Color::Yellow);
+			writeln!(writer, "{}", format_args!($($arg)*)).ok();
+			writer.set_foreground_color($crate::vga_buffer::Color::Green);
+		});
+	}};
+}
+
+
 #[doc(hidden)]
 pub fn _print(args: fmt::Arguments) {
 	use core::fmt::Write;

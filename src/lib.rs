@@ -4,6 +4,8 @@
 #![feature(ptr_internals)]
 #![feature(naked_functions)]
 
+#![feature(ptr_metadata)]
+
 use core::panic::PanicInfo;
 
 mod vga_buffer;
@@ -21,7 +23,7 @@ mod fs;
 #[macro_use]
 extern crate bitflags;
 extern crate alloc;
-
+ 
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
@@ -31,10 +33,6 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	cpu::enable_nxe_bit();
 	cpu::enable_write_protect_bit();
 	memory::init(multiboot_information_address);
-	// unsafe{
-	// 	cpu::init_syscall(interrupts::syscall_interrupt_handler as u64);	
-	// }
-	
 	//time::sleep(2000);
 	vga_buffer::clear_screen();
 
@@ -42,7 +40,9 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	//executor.spawn(multitasking::Task::new(print_a()));
 	//executor.spawn(multitasking::Task::new(print_b()));
 	executor.spawn(multitasking::Task::new(keyboard::print_keypresses()));
-	executor.spawn(multitasking::Task::new(cfs()));
+	let executor_ptr = &mut executor as *mut multitasking::Executor;
+	executor.spawn(multitasking::Task::new(cfs(executor_ptr)));
+
 	print!("Hello World!\n>");
 	executor.run();
 }
@@ -63,13 +63,16 @@ async fn print_b() {
 	}
 }
 
-async fn cfs() {
+
+async fn cfs(executor: *mut multitasking::Executor) {
 	let mut ata = fs::AtaDevice::new();
 	let mut fs = fs::Fat12Fs::new(ata);
 
-	let mut program_buf = [0u8; 8192];
-	let size = fs.read_file(b"APP        ", &mut program_buf).unwrap();
-	fs::load_elf_and_jump(&program_buf[..size]);
+	let mut program_buf = [0u8; 65536];
+	unsafe{
+		let size = fs.read_file(b"APP        ", &mut program_buf).unwrap();	
+		fs::load_elf_and_jump(&program_buf[..size], executor);
+	}
 	
 	//tfs(fs).await;
 }

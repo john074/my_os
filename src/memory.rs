@@ -19,11 +19,11 @@ pub const HEAP_START: usize = 0x_4444_4444_0000;
 pub const HEAP_SIZE: usize = 100 * 1024;
 const BLOCK_SIZES: &[usize] = &[8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
-pub const USER_SPACE_START: usize = 0x5555_0000_0000;
-pub const USER_SPACE_SIZE: usize = 100 * 1024;
+//pub const USER_SPACE_START: usize = 0x5555_0000_0000;
+//pub const USER_SPACE_SIZE: usize = 100 * 1024;
 
 #[global_allocator]
-static ALLOCATOR: Locked<FixedSizeBlockAllocator> = Locked::new(FixedSizeBlockAllocator::new());
+pub static ALLOCATOR: Locked<FixedSizeBlockAllocator> = Locked::new(FixedSizeBlockAllocator::new());
 
 pub type PhysicalAddress = usize;
 pub type VirtualAddress = usize;
@@ -104,16 +104,16 @@ pub fn init(multiboot_information_address: usize) {
 		active_table.map(page, WRITABLE, &mut frame_allocator); 
 	}
 
-	let us_start_page = Page::containing_address(USER_SPACE_START);
-	let us_end_page = Page::containing_address(USER_SPACE_START + USER_SPACE_SIZE - 1);
+	//let us_start_page = Page::containing_address(USER_SPACE_START);
+	//let us_end_page = Page::containing_address(USER_SPACE_START + USER_SPACE_SIZE - 1);
 	
-	for page in Page::range_inclusive(us_start_page, us_end_page) {
-		active_table.map(page, USER_ACCESSIBLE | WRITABLE, &mut frame_allocator); 
-	}
+	// for page in Page::range_inclusive(us_start_page, us_end_page) {
+	// 	active_table.map(page, USER_ACCESSIBLE | WRITABLE, &mut frame_allocator); 
+	// }
 
 	unsafe {
 		ALLOCATOR.lock().init(HEAP_START, HEAP_SIZE);
-		ALLOCATOR.lock().init(USER_SPACE_START, USER_SPACE_SIZE);
+		//ALLOCATOR.lock().init(USER_SPACE_START, USER_SPACE_SIZE);
 	}
 		
 	println!("Memory initialization    [OK]");
@@ -795,20 +795,27 @@ unsafe impl GlobalAlloc for Locked<FixedSizeBlockAllocator> {
 
 	unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
 		let mut allocator = self.lock();
+		//println!("1!");
 		match list_index(&layout) {
 			Some(index) => {
+			//println!("2!");
 				let new_node = FixedSizeListNode {
 					next: allocator.list_heads[index].take()
 				};
+				//println!("3!");
 				assert!(mem::size_of::<FixedSizeListNode>() <= BLOCK_SIZES[index]);
 				assert!(mem::align_of::<FixedSizeListNode>() <= BLOCK_SIZES[index]);
+				//println!("4!");
 				let new_node_ptr = ptr as *mut FixedSizeListNode;
+				//println!("5!");
 				unsafe {
 					new_node_ptr.write(new_node);
+					//println!("6!");
 					allocator.list_heads[index] = Some(&mut *new_node_ptr);
 				}
 			}
 			None => {
+			//println!("10!");
 				//let ptr = NonNull::new(ptr).unwrap();
 				//unimplemented!()
 				allocator.fallback_allocator.dealloc(ptr, layout);

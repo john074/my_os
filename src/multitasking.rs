@@ -8,9 +8,10 @@ use alloc::task::Wake;
 use crossbeam_queue::ArrayQueue;
 
 use crate::cpu;
+use crate::println;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct TaskId(u64);
+pub struct TaskId(pub u64);
 
 impl TaskId {
 	fn new() -> Self {
@@ -21,7 +22,7 @@ impl TaskId {
 
 
 pub struct Task {
-	id: TaskId,
+	pub id: TaskId,
 	future: Pin<Box<dyn Future<Output = ()>>>
 }
 
@@ -41,7 +42,8 @@ impl Task {
 pub struct Executor {
 	tasks: BTreeMap<TaskId, Task>,
 	task_queue: Arc<ArrayQueue<TaskId>>,
-	waker_cache: BTreeMap<TaskId, Waker>
+	waker_cache: BTreeMap<TaskId, Waker>,
+	pub current_task: Option<TaskId>,
 }
 
 impl Executor {
@@ -49,7 +51,8 @@ impl Executor {
 		Executor {
 			tasks: BTreeMap::new(),
 			task_queue: Arc::new(ArrayQueue::new(100)),
-			waker_cache: BTreeMap::new()
+			waker_cache: BTreeMap::new(),
+			current_task: None
 		}
 	}
 
@@ -62,12 +65,13 @@ impl Executor {
 	}
 
 	fn run_ready_tasks(&mut self) {
+		cpu::enable_interrupts();
 		let Self {
 			tasks,
 			task_queue,
 			waker_cache,
+			current_task,
 		} = self;
-
 		while let Some(task_id) = task_queue.pop() {
 			let task = match tasks.get_mut(&task_id) {
 				Some(task) => task,
@@ -75,6 +79,7 @@ impl Executor {
 			};
 			let waker = waker_cache.entry(task_id).or_insert_with(|| TaskWaker::new(task_id, task_queue.clone()));
 			let mut context = Context::from_waker(waker);
+			self.current_task = Some(task_id);
 			match task.poll(&mut context) {
 				Poll::Ready(()) => {
 					tasks.remove(&task_id);
@@ -82,6 +87,7 @@ impl Executor {
 				}
 				Poll::Pending => {}
 			}
+			self.current_task = None;
 		}
 	}
 
