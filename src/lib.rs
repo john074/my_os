@@ -7,6 +7,7 @@
 #![feature(ptr_metadata)]
 
 use core::panic::PanicInfo;
+use alloc::boxed::Box; 
 
 mod vga_buffer;
 mod interrupts;
@@ -18,103 +19,62 @@ mod time;
 mod std;
 mod multitasking;
 mod keyboard;
+mod fat32;
 mod fs;
 
 #[macro_use]
 extern crate bitflags;
+#[macro_use]
 extern crate alloc;
- 
+
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	vga_buffer::WRITER.lock().set_foreground_color(vga_buffer::Color::Green);
 	interrupts::init();
-	//time::sleep(1000);
+	time::sleep(1000);
 	cpu::enable_nxe_bit();
 	cpu::enable_write_protect_bit();
 	memory::init(multiboot_information_address);
-	//time::sleep(2000);
+	time::sleep(1000);
+	let mut executor = multitasking::Executor::new();
+	let ata = fat32::AtaDevice::new();
+	let boxed_ata = Box::new(ata);
+	let mut fs = fat32::mount_fat32(boxed_ata).unwrap();
+	let executor_ptr = &mut executor as *mut multitasking::Executor;
+	let fs_ptr = &mut fs as *mut fat32::FAT32Volume;
 	vga_buffer::clear_screen();
 
-	let mut executor = multitasking::Executor::new();
-	//executor.spawn(multitasking::Task::new(print_a()));
-	//executor.spawn(multitasking::Task::new(print_b()));
 	executor.spawn(multitasking::Task::new(keyboard::print_keypresses()));
-	let executor_ptr = &mut executor as *mut multitasking::Executor;
-	executor.spawn(multitasking::Task::new(cfs(executor_ptr)));
-
+	executor.spawn(multitasking::Task::new(fat32_test(fs_ptr, executor_ptr)));
+	executor.spawn(multitasking::Task::new(fat32_test_second_programm(fs_ptr, executor_ptr)));
 	print!("Hello World!\n>");
 	executor.run();
 }
 
-async fn print_a() {
-	loop {
-		print!("a");
-		multitasking::cooperate().await;
-		time::sleep(1000);
-	}
+async fn fat32_test(fs_ptr: *mut fat32::FAT32Volume, executor: *mut multitasking::Executor) {
+	let fs = unsafe { &mut *fs_ptr };
+	fs.create_directory("/docs");
+	//fs.create_directory("/docs/subdocs");
+	fs.create_file("/docs/readme.txt", 0);
+	//println!("{:#?}", fs.list_dir("/"));
+	println!("{:#?}", fs.list_dir("/docs"));
+	//println!("{:#?}", fs.list_dir("/docs/subdocs"));
+	println!("write file: {:#?}", fs.write_file("/docs/readme.txt", b"hello!!!"));
+	println!("read file: {:#?}", fs.read_file("/docs/readme.txt"));
+	println!("delete file: {:#?}", fs.delete_file("/docs/readme.txt"));
+	println!("list /docs: {:#?}", fs.list_dir("/docs"));
+	println!("delete /docs: {:#?}", fs.delete_directory("/docs"));
+	println!("list /:{:#?}", fs.list_dir("/"));
+	
+	let data = fs.read_file("/APP").unwrap();	
+	fat32::load_elf_and_jump(&data, executor);
 }
 
-async fn print_b() {
-	loop {
-		print!("b");
-		multitasking::cooperate().await;
-		time::sleep(1000);
-	}
-}
-
-
-async fn cfs(executor: *mut multitasking::Executor) {
-	let mut ata = fs::AtaDevice::new();
-	let mut fs = fs::Fat12Fs::new(ata);
-
-	let mut program_buf = [0u8; 65536];
-	unsafe{
-		let size = fs.read_file(b"APP        ", &mut program_buf).unwrap();	
-		fs::load_elf_and_jump(&program_buf[..size], executor);
-	}
-	
-	//tfs(fs).await;
-}
-
-async fn tfs<D: fs::BlockDevice>(mut fs: fs::Fat12Fs<D>) {
-	let filename = *b"TEST2   TXT";
-	let contents = b"Hello from Rust!\n";
-	fs.write_file(&filename, contents);
-
-	println!("file 'TEST2.TXT' created");
-	println!("All files:");
-	fs.list_files();
-
-	fs.delete_file(b"TEST    TXT");
-	println!("file 'TEST.TXT' deleted");
-	println!("All files:");
-	fs.list_files();
-	
-	let mut name = *b"HELLO   TXT";
-	let mut buffer = [0u8; 512];
-	
-	if let Some(len) = fs.read_file(&name, &mut buffer) {
-	    print!("Read file 'HELLO.TXT': {}\n", core::str::from_utf8(&buffer[..len]).unwrap());
-	} else {
-	    print!("File not found\n");
-	}
-
-	name = *b"TEST    TXT";
-	
-	if let Some(len) = fs.read_file(&name, &mut buffer) {
-		print!("Read file 'TEST.TXT': {}\n", core::str::from_utf8(&buffer[..len]).unwrap());
-	} else {
-	    print!("File not found\n");
-	}
-
-	name = *b"TEST2   TXT";
-		
-	if let Some(len) = fs.read_file(&name, &mut buffer) {
-		print!("Read file 'TEST2.TXT': {}\n", core::str::from_utf8(&buffer[..len]).unwrap());
-	} else {
-	    print!("File not found\n");
-	}	
+async fn fat32_test_second_programm(fs_ptr: *mut fat32::FAT32Volume, executor: *mut multitasking::Executor) {
+	let fs = unsafe { &mut *fs_ptr };
+	let data = fs.read_file("/APP2").unwrap();	
+	fat32::load_elf_and_jump(&data, executor);
 }
 
 pub fn hlt_loop() -> ! {

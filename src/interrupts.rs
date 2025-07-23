@@ -6,10 +6,9 @@ use spin::Mutex;
 use alloc::boxed::Box;
 
 use crate::println;
-use crate::debug;
 use crate::gdt;
 use crate::keyboard;
-use crate::fs;
+use crate::fat32;
 use crate::multitasking;
 use crate::memory;
 
@@ -123,7 +122,7 @@ extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, e
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
-	debug!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
+	println!("EXCEPTION: BREAKPOINT\n{:#?}", stack_frame);
 }
 
 macro_rules! irq_handler {
@@ -184,7 +183,7 @@ extern "sysv64" fn syscall_handler(_stack_frame: &mut InterruptStackFrame, regs:
     let arg3 = regs.rdx as u64;
     let _arg4 = regs.r8 as u64;
 
-    debug!("SYSCALL n={} arg1={:#x} arg2={} arg3={:#x}", n, arg1, arg2, arg3);
+    println!("SYSCALL n={} arg1={:#x} arg2={} arg3={:#x}", n, arg1, arg2, arg3);
     
     let res = _syscall_handler(n, arg1, arg2, arg3) as usize;
 
@@ -234,10 +233,11 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64  {
 			ret = 0;
 		}
 		2 => { // SYS_EXIT
-		    debug!("Program requested exit via syscall.");
+		    println!("Program requested exit via syscall.");
 		    unsafe {
-		        let addr = fs::RETURN_ADDR;
+		        let addr = fat32::RETURN_ADDR;
 		        core::arch::asm!("jmp {}", in(reg) addr, options(noreturn));
+		        ret = 0;
 		    }
 		}
 		3 => { // SYS_
@@ -250,9 +250,10 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64  {
     		unsafe {
 		        let raw_ptr = arg1 as *mut multitasking::Task;
 		        let boxed = Box::from_raw(raw_ptr);
-		        fs::EXECUTOR_PTR.as_mut().unwrap().spawn(*boxed);
-		        fs::EXECUTOR_PTR.as_mut().unwrap().run();
+		        fat32::EXECUTOR_PTR.as_mut().unwrap().spawn(*boxed);
+		        fat32::EXECUTOR_PTR.as_mut().unwrap().run();
 		    }
+		    ret = 0;
 		}		
 		6 => { // SYS_ALLOC
 				use alloc::alloc::{ GlobalAlloc, Layout };
@@ -270,12 +271,12 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64  {
 			    }
 			    ret = 0;
 		}
-		8 => { // SYS_WRITE
-			println!("{}", arg1);
+		8 => { // SYS_WRITE_NUM
+			println!("{:p}", arg1 as *const *const ());
 			ret = 0;
 		}		
 		_ => {
-			debug!("Unknown syscall: {}", number);
+			println!("Unknown syscall: {}", number);
 			ret = -1i64 as u64;
 		}
 	}
@@ -289,7 +290,7 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64  {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn print_cs_ss(cs: u64, ss: u64) {
-    debug!(">>> CS: {:#x}, SS: {:#x}", cs, ss);
+    println!(">>> CS: {:#x}, SS: {:#x}", cs, ss);
 }
 
 irq_handler!(irq14_handler, 14);

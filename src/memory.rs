@@ -4,23 +4,16 @@ use core::marker::PhantomData;
 use core::ptr::{ Unique, self,  null_mut };
 use core::cell::UnsafeCell;
 use core::mem;
-use spin::Mutex;
 use alloc::alloc::{ GlobalAlloc, Layout };
-use lazy_static::lazy_static;
 use crate::cpu::{ cr3, write_raw_cr3 }; 
 use crate::println;
-
-use crate::fs;
 
 pub const PAGE_SIZE: usize = 4096;
 pub const ENTRY_COUNT: usize = 512;
 pub const P4: *mut Table<Level4> = 0xffffffff_fffff000 as *mut _; 
 pub const HEAP_START: usize = 0x_4444_4444_0000;
-pub const HEAP_SIZE: usize = 100 * 1024;
+pub const HEAP_SIZE: usize = 10000 * 1024;
 const BLOCK_SIZES: &[usize] = &[8, 16, 32, 64, 128, 256, 512, 1024, 2048];
-
-//pub const USER_SPACE_START: usize = 0x5555_0000_0000;
-//pub const USER_SPACE_SIZE: usize = 100 * 1024;
 
 #[global_allocator]
 pub static ALLOCATOR: Locked<FixedSizeBlockAllocator> = Locked::new(FixedSizeBlockAllocator::new());
@@ -104,16 +97,8 @@ pub fn init(multiboot_information_address: usize) {
 		active_table.map(page, WRITABLE, &mut frame_allocator); 
 	}
 
-	//let us_start_page = Page::containing_address(USER_SPACE_START);
-	//let us_end_page = Page::containing_address(USER_SPACE_START + USER_SPACE_SIZE - 1);
-	
-	// for page in Page::range_inclusive(us_start_page, us_end_page) {
-	// 	active_table.map(page, USER_ACCESSIBLE | WRITABLE, &mut frame_allocator); 
-	// }
-
 	unsafe {
 		ALLOCATOR.lock().init(HEAP_START, HEAP_SIZE);
-		//ALLOCATOR.lock().init(USER_SPACE_START, USER_SPACE_SIZE);
 	}
 		
 	println!("Memory initialization    [OK]");

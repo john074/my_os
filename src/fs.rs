@@ -5,10 +5,8 @@ use core::ptr::copy_nonoverlapping;
 
 use crate::println;
 use crate::multitasking;
-use crate::cpu;
 
 pub static mut RETURN_ADDR: usize = 0;
-pub static mut COOP_ADDR: usize = 0;
 pub static mut EXECUTOR_PTR: *mut multitasking::Executor = core::ptr::null_mut();
 
 pub fn load_elf_and_jump(elf_data: &[u8], executor: *mut multitasking::Executor) {

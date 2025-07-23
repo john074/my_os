@@ -22,10 +22,14 @@ iso:
 	cp -f $(KERNEL) $(ISO_DIR)/
 	grub-mkrescue -o $(ISO_IMAGE) iso
 
+drive:
+	dd if=/dev/zero of=fat32.img bs=512 count=288000
+	mkfs.vfat -F 32 fat32.img
+
 run:
 	qemu-system-x86_64 \
   -drive file=boot.iso,format=raw,media=cdrom \
-  -drive file=fat12.img,format=raw,if=ide,index=1,media=disk \
+  -drive file=fat32.img,format=raw,if=ide,index=1,media=disk \
   -boot order=d \
   -serial stdio \
   -machine pc \
