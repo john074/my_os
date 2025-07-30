@@ -12,7 +12,6 @@ pub extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
     dest
 }
 
-
 #[unsafe(no_mangle)]
 pub extern "C" fn memset(s: *mut u8, c: i32, n: usize) -> *mut u8 {
     for i in 0..n {

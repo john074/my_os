@@ -6,6 +6,7 @@ use spin::Mutex;
 use alloc::boxed::Box;
 
 use crate::println;
+use crate::print;
 use crate::gdt;
 use crate::keyboard;
 use crate::fat32;
@@ -183,7 +184,7 @@ extern "sysv64" fn syscall_handler(_stack_frame: &mut InterruptStackFrame, regs:
     let arg3 = regs.rdx as u64;
     let _arg4 = regs.r8 as u64;
 
-    println!("SYSCALL n={} arg1={:#x} arg2={} arg3={:#x}", n, arg1, arg2, arg3);
+    //println!("SYSCALL n={} arg1={:#x} arg2={} arg3={:#x}", n, arg1, arg2, arg3);
     
     let res = _syscall_handler(n, arg1, arg2, arg3) as usize;
 
@@ -191,33 +192,6 @@ extern "sysv64" fn syscall_handler(_stack_frame: &mut InterruptStackFrame, regs:
 
     unsafe { PICS.lock().notify_end_of_interrupt(0x80) };
 }
-
-// extern "x86-interrupt" fn syscall_interrupt_handler(stack_frame: InterruptStackFrame) {
-// 	let n: u64;
-//     let a1: u64;
-//     let a2: u64;
-//     let a3: u64;
-// 
-//     unsafe {
-//         core::arch::asm!(
-//             "mov r12, rax", // syscall number
-//             "mov r13, rdi",
-//             "mov r14, rsi",
-//             "mov r15, rdx",
-// 
-//             "mov {0}, r12",
-//             "mov {1}, r13",
-//             "mov {2}, r14",
-//             "mov {3}, r15",
-//             out(reg) n,
-//             out(reg) a1,
-//             out(reg) a2,
-//             out(reg) a3,
-//         );
-//     }
-//     
-//     syscall_handler(n, a1, a2, a3);
-// }
 
 #[unsafe(no_mangle)]
 pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64  {
@@ -228,7 +202,10 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64  {
 			let len = arg2 as usize;
 			let s = unsafe { core::slice::from_raw_parts(ptr, len) };
 			if let Ok(text) = core::str::from_utf8(s) {
-				println!("{}", text);
+				print!("{}", text);
+				if text.contains("\n") {
+					print!(">");
+				}
 			}
 			ret = 0;
 		}
@@ -240,8 +217,19 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64  {
 		        ret = 0;
 		    }
 		}
-		3 => { // SYS_
-			ret = 0;
+		3 => { // SYS_READ
+		    let user_ptr = arg1 as *mut u8;
+		    let user_len = arg2 as usize;
+		
+		    let string = keyboard::OUTPUT_STRING.lock();
+		    let bytes = string.as_bytes();
+		
+		    let copy_len = core::cmp::min(user_len, bytes.len());
+		
+		    unsafe {
+		        core::ptr::copy_nonoverlapping(bytes.as_ptr(), user_ptr, copy_len);
+		    }
+		    ret = copy_len as u64;
 		}
 		4 => { // SYS_
 			ret = 0;

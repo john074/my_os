@@ -6,7 +6,17 @@ KERNEL = kernel.bin
 ISO_DIR = iso/boot
 ISO_IMAGE = boot.iso
 
-all: build assembler link iso run
+USR_DIRS := $(shell find usr -mindepth 1 -maxdepth 1 -type d)
+
+all: usr build assembler link iso run
+
+usr:
+	@for dir in $(USR_DIRS); do \
+		if [ -f $$dir/Makefile ]; then \
+			$(MAKE) -C $$dir all; \
+		fi \
+	done
+	mv usr/fat32.img .
 
 build:
 	cargo +nightly build -Z build-std=core,alloc,compiler_builtins --target=$(TARGET).json
@@ -41,4 +51,4 @@ clean:
 	cargo clean
 	rm -f $(KERNEL) $(ISO_IMAGE)
 
-.PHONY: all build link iso run clean
+.PHONY: all usr build link iso run clean

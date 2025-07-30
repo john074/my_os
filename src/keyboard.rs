@@ -4,6 +4,9 @@ use core::{ pin::Pin, task::{ Poll, Context }};
 use futures_util::stream::{ Stream, StreamExt };
 use futures_util::task::AtomicWaker;
 use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
+use alloc::string::String;
+use alloc::vec::Vec;
+use spin::Mutex;
 
 use crate::println;
 use crate::print;
@@ -11,6 +14,9 @@ use crate::vga_buffer;
 
 static SCANCODE_QUEUE: OnceCell<ArrayQueue<u8>> = OnceCell::uninit();
 static WAKER: AtomicWaker = AtomicWaker::new();
+
+static INPUT_BUFFER: Mutex<Vec<char>> = Mutex::new(Vec::new());
+pub static OUTPUT_STRING: Mutex<String> = Mutex::new(String::new());
 
 pub fn add_scancode(scancode: u8) {
 	if let Ok(queue) = SCANCODE_QUEUE.try_get() {
@@ -63,15 +69,22 @@ pub async fn print_keypresses() {
 	while let Some(scancode) = scancodes.next().await {
 		if scancode == 0x0E {
 			vga_buffer::rm_char();
+			INPUT_BUFFER.lock().pop();
 		}
 		else if scancode == 0x1C {
 			print!("\n>");
+			let new_str: alloc::string::String = INPUT_BUFFER.lock().iter().collect();
+			*OUTPUT_STRING.lock() = new_str;
+			INPUT_BUFFER.lock().clear();
 		}
 		else {
 			if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
 				if let Some(key) = keyboard.process_keyevent(key_event) {
 					match key {
-						DecodedKey::Unicode(character) => print!("{}", character),
+						DecodedKey::Unicode(character) => {
+							print!("{}", character);
+							INPUT_BUFFER.lock().push(character);	
+						},
 						DecodedKey::RawKey(key) => print!(""),
 					}
 				}

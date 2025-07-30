@@ -48,7 +48,7 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	executor.spawn(multitasking::Task::new(keyboard::print_keypresses()));
 	executor.spawn(multitasking::Task::new(fat32_test(fs_ptr, executor_ptr)));
 	executor.spawn(multitasking::Task::new(fat32_test_second_programm(fs_ptr, executor_ptr)));
-	print!("Hello World!\n>");
+	//print!("Hello World!\n>");
 	executor.run();
 }
 
@@ -58,22 +58,22 @@ async fn fat32_test(fs_ptr: *mut fat32::FAT32Volume, executor: *mut multitasking
 	//fs.create_directory("/docs/subdocs");
 	fs.create_file("/docs/readme.txt", 0);
 	//println!("{:#?}", fs.list_dir("/"));
-	println!("{:#?}", fs.list_dir("/docs"));
+	fs.list_dir("/docs");
 	//println!("{:#?}", fs.list_dir("/docs/subdocs"));
-	println!("write file: {:#?}", fs.write_file("/docs/readme.txt", b"hello!!!"));
-	println!("read file: {:#?}", fs.read_file("/docs/readme.txt"));
-	println!("delete file: {:#?}", fs.delete_file("/docs/readme.txt"));
-	println!("list /docs: {:#?}", fs.list_dir("/docs"));
-	println!("delete /docs: {:#?}", fs.delete_directory("/docs"));
-	println!("list /:{:#?}", fs.list_dir("/"));
+	fs.write_file("/docs/readme.txt", b"hello!!!");
+	fs.read_file("/docs/readme.txt");
+	fs.delete_file("/docs/readme.txt");
+	fs.list_dir("/docs");
+	fs.delete_directory("/docs");
+	//println!("{:#?}", fs.list_dir("/"));
 	
-	let data = fs.read_file("/APP").unwrap();	
+	let data = fs.read_file("/SOMNIA").unwrap();	
 	fat32::load_elf_and_jump(&data, executor);
 }
 
 async fn fat32_test_second_programm(fs_ptr: *mut fat32::FAT32Volume, executor: *mut multitasking::Executor) {
 	let fs = unsafe { &mut *fs_ptr };
-	let data = fs.read_file("/APP2").unwrap();	
+	let data = fs.read_file("/TEST").unwrap();	
 	fat32::load_elf_and_jump(&data, executor);
 }
 

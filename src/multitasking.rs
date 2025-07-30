@@ -73,6 +73,7 @@ impl Executor {
 			current_task,
 		} = self;
 		while let Some(task_id) = task_queue.pop() {
+			//println!("{:#?}", task_id);
 			let task = match tasks.get_mut(&task_id) {
 				Some(task) => task,
 				None => continue
