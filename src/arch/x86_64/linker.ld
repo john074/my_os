@@ -57,6 +57,4 @@ SECTIONS {
     *(.comment)
     *(.debug*)
   }
-  
-  
 }

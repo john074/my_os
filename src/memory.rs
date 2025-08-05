@@ -12,7 +12,7 @@ pub const PAGE_SIZE: usize = 4096;
 pub const ENTRY_COUNT: usize = 512;
 pub const P4: *mut Table<Level4> = 0xffffffff_fffff000 as *mut _; 
 pub const HEAP_START: usize = 0x_4444_4444_0000;
-pub const HEAP_SIZE: usize = 10000 * 1024;
+pub const HEAP_SIZE: usize = 100000 * 1024;
 const BLOCK_SIZES: &[usize] = &[8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
 #[global_allocator]
@@ -72,6 +72,7 @@ impl EntryFlags {
 	}
 }
 
+
 pub fn init(multiboot_information_address: usize) {
 	let boot_info = unsafe{ BootInformation::load(multiboot_information_address as *const BootInformationHeader).unwrap() };
 	
@@ -89,7 +90,7 @@ pub fn init(multiboot_information_address: usize) {
 	
 	let mut frame_allocator = AreaFrameAllocator::new(kernel_start as usize, kernel_end as usize, multiboot_start, multiboot_end, memory_map_tag.memory_areas());
 	let mut active_table = remap_kernel(&mut frame_allocator, &boot_info);
-
+	
 	let heap_start_page = Page::containing_address(HEAP_START);
 	let heap_end_page = Page::containing_address(HEAP_START + HEAP_SIZE - 1);
 
@@ -237,7 +238,7 @@ impl<'a> AreaFrameAllocator<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Page {
-	number: usize,
+	pub number: usize,
 }
 
 impl Page {

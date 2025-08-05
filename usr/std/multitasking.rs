@@ -1,16 +1,14 @@
 use core::{ future::Future, pin::Pin };
-use core::sync::atomic::{ AtomicU64, Ordering };
 use core::task::{ Context, Poll };
 use alloc::boxed::Box;
-
+use crate::std::syscall;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TaskId(pub u64);
 
 impl TaskId {
 	pub fn new() -> Self {
-		static NEXT_ID: AtomicU64 = AtomicU64::new(10000);
-		TaskId(NEXT_ID.fetch_add(1, Ordering::Relaxed))
+		TaskId(syscall::get_task_id())
 	}
 }
 

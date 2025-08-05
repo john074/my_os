@@ -1,6 +1,7 @@
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
+use alloc::vec::Vec;
 use spin::Mutex;
 
 use alloc::boxed::Box;
@@ -12,11 +13,14 @@ use crate::keyboard;
 use crate::fat32;
 use crate::multitasking;
 use crate::memory;
+use crate::vga_buffer;
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 
 pub static PICS: Mutex<ChainedPics> = Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
+
+static mut SCANCODE_STREAM: Option<keyboard::ScancodeStream> = None; 
 
 #[repr(align(8), C)]
 #[derive(Debug, Clone, Copy, Default)]
@@ -58,7 +62,7 @@ pub fn init() {
 	unsafe { PICS.lock().initialize(); }
 	println!("Programmable interrupt controller is initialized.");
 	x86_64::instructions::interrupts::enable();
-	println!("Interrupts initialization\t[OK]");
+	println!("Interrupts initialization    [OK]");
 }
 
 lazy_static! {
@@ -70,6 +74,9 @@ lazy_static! {
 		let mut idt = InterruptDescriptorTable::new();
 		idt.breakpoint.set_handler_fn(breakpoint_handler);
 		idt.page_fault.set_handler_fn(page_fault_handler);
+		
+		idt.stack_segment_fault.set_handler_fn(stack_segment_fault_handler);
+		idt.segment_not_present.set_handler_fn(segment_not_present_handler);
 		unsafe {
 			idt.double_fault.set_handler_fn(double_fault_handler).set_stack_index(gdt::DOUBLE_FAULT_IST_INDEX);
 			idt.general_protection_fault.set_handler_fn(general_protection_fault_handler).set_stack_index(gdt::GENERAL_PROTECTION_FAULT_IST_INDEX);
@@ -78,7 +85,7 @@ lazy_static! {
 		idt[InterruptIndex::Keyboard.as_usize()].set_handler_fn(keyboard_interrupt_handler);
 
 		idt[(PIC_1_OFFSET + 14) as usize].set_handler_fn(irq14_handler);
-
+		
 		//idt[0x80].set_handler_fn(syscall_interrupt_handler);
 		unsafe {
 			let f = wrapped_syscall_handler as *mut fn();
@@ -120,6 +127,14 @@ extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame,
 extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, error_code: PageFaultErrorCode) {
     let addr = x86_64::registers::control::Cr2::read();
     panic!("Page Fault at {:#x}, error: {:?}\n{:#?}", addr, error_code, stack_frame);
+}
+
+extern "x86-interrupt" fn stack_segment_fault_handler(stack_frame: InterruptStackFrame, error_code: u64) {
+    panic!("EXCEPTION: STACK SEGMENT FAULT\nStack Frame: {:#?}\nError: {:?}", stack_frame, error_code);
+}
+
+extern "x86-interrupt" fn segment_not_present_handler(stack_frame: InterruptStackFrame, error_code: u64) {
+    panic!("EXCEPTION: SEGMENT NOT PRESENT\nStack Frame: {:#?}\nError: {:?}", stack_frame, error_code);
 }
 
 extern "x86-interrupt" fn breakpoint_handler(stack_frame: InterruptStackFrame) {
@@ -182,11 +197,13 @@ extern "sysv64" fn syscall_handler(_stack_frame: &mut InterruptStackFrame, regs:
     let arg1 = regs.rdi as u64;
     let arg2 = regs.rsi as u64;
     let arg3 = regs.rdx as u64;
-    let _arg4 = regs.r8 as u64;
+    let arg4 = regs.r8 as u64;
 
-    //println!("SYSCALL n={} arg1={:#x} arg2={} arg3={:#x}", n, arg1, arg2, arg3);
+	if n != 3 && n != 1 {
+    	//println!("SYSCALL n={} arg1={:#x} arg2={} arg3={:#x}", n, arg1, arg2, arg3);
+    }
     
-    let res = _syscall_handler(n, arg1, arg2, arg3) as usize;
+    let res = _syscall_handler(n, arg1, arg2, arg3, arg4) as usize;
 
     regs.rax = res;
 
@@ -194,8 +211,8 @@ extern "sysv64" fn syscall_handler(_stack_frame: &mut InterruptStackFrame, regs:
 }
 
 #[unsafe(no_mangle)]
-pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64  {
-	let ret;
+pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64) -> u64  {
+	let mut ret;
 	match number {
 		1 => { // SYS_WRITE
 			let ptr = arg1 as *const u8;
@@ -203,9 +220,9 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64  {
 			let s = unsafe { core::slice::from_raw_parts(ptr, len) };
 			if let Ok(text) = core::str::from_utf8(s) {
 				print!("{}", text);
-				if text.contains("\n") {
-					print!(">");
-				}
+				// if text.contains("\n") {
+				// 	print!(">");
+				// }
 			}
 			ret = 0;
 		}
@@ -218,25 +235,22 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64  {
 		    }
 		}
 		3 => { // SYS_READ
-		    let user_ptr = arg1 as *mut u8;
-		    let user_len = arg2 as usize;
-		
-		    let string = keyboard::OUTPUT_STRING.lock();
-		    let bytes = string.as_bytes();
-		
-		    let copy_len = core::cmp::min(user_len, bytes.len());
-		
-		    unsafe {
-		        core::ptr::copy_nonoverlapping(bytes.as_ptr(), user_ptr, copy_len);
-		    }
-		    ret = copy_len as u64;
+			let user_buffer = unsafe { &mut *(arg1 as *mut Vec<char>) };
+			let data: Vec<char> = keyboard::INPUT_BUFFER.lock().iter().cloned().collect();
+			keyboard::INPUT_BUFFER.lock().clear();
+			for i in data {
+				user_buffer.push(i);
+			}
+			ret = 0;		    
 		}
-		4 => { // SYS_
+		4 => { // SYS_RM_CHAR
+			vga_buffer::WRITER.lock().rm_char();
 			ret = 0;
 		}
 		5 => {
     		unsafe {
 		        let raw_ptr = arg1 as *mut multitasking::Task;
+		        //(*raw_ptr).id = multitasking::TaskId::new();
 		        let boxed = Box::from_raw(raw_ptr);
 		        fat32::EXECUTOR_PTR.as_mut().unwrap().spawn(*boxed);
 		        fat32::EXECUTOR_PTR.as_mut().unwrap().run();
@@ -249,6 +263,7 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64  {
 			  	let ptr = unsafe {
 			        memory::ALLOCATOR.alloc(layout)
 			    };
+			    //println!("ALLOC returns: 0x{:x}", ptr as u64);
 			    ret = ptr as u64;
 		}
 		7 => { // SYS_DEALLOC
@@ -259,8 +274,105 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64  {
 			    }
 			    ret = 0;
 		}
-		8 => { // SYS_WRITE_NUM
-			println!("{:p}", arg1 as *const *const ());
+		8 => { // SYS_CHECK_DIR_EXISTS
+			let ptr = arg1 as *const u8;
+			let len = arg2 as usize;
+			let s = unsafe { core::slice::from_raw_parts(ptr, len) };
+			ret = 0;
+			if let Ok(text) = core::str::from_utf8(s) {
+				let fs = unsafe { &mut *fat32::FS_PTR };
+				if fs.find_path(text).is_some() {
+					ret = 1;
+				}
+			}
+		}	
+		9 => { // SYS_GEN_TASK_ID
+			ret = multitasking::TaskId::new().0;
+		}
+		10 => { // SYS_LIST_DIR
+			let ptr = arg1 as *const u8;
+			let len = arg2 as usize;
+			let s = unsafe { core::slice::from_raw_parts(ptr, len) };
+			if let Ok(text) = core::str::from_utf8(s) {
+				let fs = unsafe { &mut *fat32::FS_PTR };
+				let data = fs.list_dir(text).unwrap();
+				let user_buffer = unsafe { &mut *(arg3 as *mut Vec<alloc::string::String>) };
+				for i in data {
+					user_buffer.push(i);
+				}
+			}
+			ret = 0;
+		}	
+		11 => { // SYS_MKDIR
+			let ptr = arg1 as *const u8;
+			let len = arg2 as usize;
+			let s = unsafe { core::slice::from_raw_parts(ptr, len) };
+			if let Ok(text) = core::str::from_utf8(s) {
+				let fs = unsafe { &mut *fat32::FS_PTR };
+				fs.create_directory(text);
+			}
+			ret = 0;
+		}
+		12 => { // SYS_MKFILE
+			let ptr = arg1 as *const u8;
+			let len = arg2 as usize;
+			let s = unsafe { core::slice::from_raw_parts(ptr, len) };
+			if let Ok(text) = core::str::from_utf8(s) {
+				let fs = unsafe { &mut *fat32::FS_PTR };
+				fs.create_file(text, 0);
+			}
+			ret = 0;
+		}
+		13 => { // SYS_WRITE_FILE
+			let ptr = arg1 as *const u8;
+			let len = arg2 as usize;
+			let s = unsafe { core::slice::from_raw_parts(ptr, len) };
+			if let Ok(text) = core::str::from_utf8(s) {
+				let content_ptr = arg3 as *const u8;
+				let content_len = arg4 as usize;
+				let data = unsafe { core::slice::from_raw_parts(content_ptr, content_len) };
+				let fs = unsafe { &mut *fat32::FS_PTR };
+				fs.write_file(text, data);
+			}
+			ret = 0;
+		},
+		14 => { // SYS_READ_FILE
+			let ptr = arg1 as *const u8;
+			let len = arg2 as usize;
+			let s = unsafe { core::slice::from_raw_parts(ptr, len) };
+			if let Ok(text) = core::str::from_utf8(s) {
+				let fs = unsafe { &mut *fat32::FS_PTR };
+				let user_ptr = arg3 as *mut u8;
+				let user_len = arg4 as usize;
+				let bytes = fs.read_file(text).unwrap();
+				let copy_len = core::cmp::min(user_len, bytes.len());
+				unsafe {
+			    	core::ptr::copy_nonoverlapping(bytes.as_ptr(), user_ptr, copy_len);
+				}
+				ret = copy_len as u64;
+			}
+			else {
+				ret = 0;
+			}
+		},
+		15 => { // SYS_MKFILE
+			let ptr = arg1 as *const u8;
+			let len = arg2 as usize;
+			let s = unsafe { core::slice::from_raw_parts(ptr, len) };
+			if let Ok(text) = core::str::from_utf8(s) {
+				let fs = unsafe { &mut *fat32::FS_PTR };
+				fs.delete_directory(text);
+			}
+			ret = 0;
+		}
+		16 => { // SYS_MKFILE
+			let ptr = arg1 as *const u8;
+			let len = arg2 as usize;
+			let s = unsafe { core::slice::from_raw_parts(ptr, len) };
+			if let Ok(text) = core::str::from_utf8(s) {
+				let fs = unsafe { &mut *fat32::FS_PTR };
+				fs.delete_file(text);
+			}
 			ret = 0;
 		}		
 		_ => {
@@ -270,8 +382,8 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64) -> u64  {
 	}
 
 	unsafe {
-	    	core::arch::asm!("mov rax, {0}", in(reg) ret, options(nostack, preserves_flags));
-	    }
+		core::arch::asm!("mov rax, {0}", in(reg) ret, options(nostack, preserves_flags));
+	}
 
 	ret
 }

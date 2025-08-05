@@ -12,6 +12,9 @@ use alloc::boxed::Box;
 use crate::multitasking;
 use crate::println;
 
+
+pub static mut FS_PTR: *mut FAT32Volume = core::ptr::null_mut();
+
 pub static mut RETURN_ADDR: usize = 0;
 pub static mut EXECUTOR_PTR: *mut multitasking::Executor = core::ptr::null_mut();
 
@@ -868,17 +871,17 @@ pub fn mount_fat32(mut device: Box<dyn BlockDevice>) -> Result<FAT32Volume, &'st
 
     println!("File System    [OK]");
 
-    Ok(FAT32Volume {
-        fat: FAT { entries: fat_entries },
-        cluster_size: bytes_per_sector as usize * sectors_per_cluster as usize,
-        root_dir_cluster,
-        device,
-        sectors_per_cluster,
-        bytes_per_sector,
-        reserved_sector_count,
-        fat_size_sectors,
-        num_fats,
-    })
+	Ok(FAT32Volume {
+		fat: FAT { entries: fat_entries },
+		cluster_size: bytes_per_sector as usize * sectors_per_cluster as usize,
+		root_dir_cluster,
+		device,
+		sectors_per_cluster,
+		bytes_per_sector,
+		reserved_sector_count,
+		fat_size_sectors,
+		num_fats,
+	})
 }
 
 

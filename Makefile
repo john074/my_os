@@ -1,25 +1,28 @@
-# Makefile
-
 TARGET = x86_64-my_os
 BUILD_DIR = target/$(TARGET)/debug
 KERNEL = kernel.bin
 ISO_DIR = iso/boot
 ISO_IMAGE = boot.iso
 
-USR_DIRS := $(shell find usr -mindepth 1 -maxdepth 1 -type d)
+PROGRAM_DIRS := $(shell find usr/programs -mindepth 1 -maxdepth 1 -type d)
+STD_DIR := usr/std
 
 all: usr build assembler link iso run
 
 usr:
-	@for dir in $(USR_DIRS); do \
+	@for dir in $(PROGRAM_DIRS); do \
+		echo "Copying std to $$dir/src/"; \
+		cp -r $(STD_DIR) $$dir/src/ || exit 1; \
 		if [ -f $$dir/Makefile ]; then \
-			$(MAKE) -C $$dir all; \
+			echo "Building $$dir"; \
+			$(MAKE) -C $$dir all || exit 1; \
 		fi \
 	done
-	mv usr/fat32.img .
+	mv usr/programs/fat32.img .
 
 build:
 	cargo +nightly build -Z build-std=core,alloc,compiler_builtins --target=$(TARGET).json
+	
 assembler:
 	nasm -felf64 src/arch/x86_64/boot.asm -o boot.o
 	nasm -felf64 src/arch/x86_64/long_mode_init.asm -o long_mode_init.o
@@ -43,10 +46,9 @@ run:
   -boot order=d \
   -serial stdio \
   -machine pc \
+  -s
   #-D qemu.log -d int,cpu,exec \
 	    
-	  
-	
 clean:
 	cargo clean
 	rm -f $(KERNEL) $(ISO_IMAGE)

@@ -5,7 +5,6 @@ pub mod sysalloc;
 pub mod time;
 pub mod multitasking;
 
-pub use syscall::{syscall, exit, spawn_task};
-pub use io::console_read;
+pub use syscall::*;
 pub use sysalloc::SysAllocator;
 pub use time::sleep;

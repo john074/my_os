@@ -15,8 +15,7 @@ use crate::vga_buffer;
 static SCANCODE_QUEUE: OnceCell<ArrayQueue<u8>> = OnceCell::uninit();
 static WAKER: AtomicWaker = AtomicWaker::new();
 
-static INPUT_BUFFER: Mutex<Vec<char>> = Mutex::new(Vec::new());
-pub static OUTPUT_STRING: Mutex<String> = Mutex::new(String::new());
+pub static INPUT_BUFFER: Mutex<Vec<char>> = Mutex::new(Vec::new());
 
 pub fn add_scancode(scancode: u8) {
 	if let Ok(queue) = SCANCODE_QUEUE.try_get() {
@@ -67,26 +66,13 @@ pub async fn print_keypresses() {
 	let mut keyboard = Keyboard::new(ScancodeSet1::new(), layouts::Us104Key, HandleControl::Ignore);
 
 	while let Some(scancode) = scancodes.next().await {
-		if scancode == 0x0E {
-			vga_buffer::rm_char();
-			INPUT_BUFFER.lock().pop();
-		}
-		else if scancode == 0x1C {
-			print!("\n>");
-			let new_str: alloc::string::String = INPUT_BUFFER.lock().iter().collect();
-			*OUTPUT_STRING.lock() = new_str;
-			INPUT_BUFFER.lock().clear();
-		}
-		else {
-			if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
-				if let Some(key) = keyboard.process_keyevent(key_event) {
-					match key {
-						DecodedKey::Unicode(character) => {
-							print!("{}", character);
-							INPUT_BUFFER.lock().push(character);	
-						},
-						DecodedKey::RawKey(key) => print!(""),
-					}
+		if let Ok(Some(key_event)) = keyboard.add_byte(scancode) {
+			if let Some(key) = keyboard.process_keyevent(key_event) {
+				match key {
+					DecodedKey::Unicode(character) => {
+						INPUT_BUFFER.lock().push(character);	
+					},
+					DecodedKey::RawKey(key) => print!(""),
 				}
 			}
 		}
