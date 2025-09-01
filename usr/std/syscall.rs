@@ -16,6 +16,7 @@ pub enum SyscallNumber {
     ReadFile = 14,
     RemoveDir = 15,
     RemoveFile = 16,
+    Run = 17,
 }
 
 pub fn syscall(n: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64) -> u64 {
@@ -89,6 +90,10 @@ pub fn rmdir(path: &str) -> u64 {
 
 pub fn rmfile(path: &str) -> u64 {
 	syscall(SyscallNumber::RemoveFile as u64, path.as_ptr() as u64, path.len() as u64, 0, 0)
+}
+
+pub fn run(path: &str) -> u64 {
+	syscall(SyscallNumber::Run as u64, path.as_ptr() as u64, path.len() as u64, 0, 0)
 }
 
 pub fn get_task_id() -> u64 {

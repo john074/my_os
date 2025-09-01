@@ -13,6 +13,7 @@ use alloc::string::{ ToString, String };
 pub extern "C" fn _start() {
     let mut task = multitasking::Task::new(user_main());
     syscall::spawn_task((&mut task as *mut multitasking::Task) as u64);
+    exit();
 }
 
 
@@ -67,14 +68,13 @@ async fn user_main() {
     			}
     			
     			let mut new_path = parse_path(&current_dir, &mut parts[1].to_string());
-    			if somnia::std::check_fs_entry_exists(&new_path) == 1 {
-    				let mut cd = new_path;
-    				if cd.contains("..") {
-    					current_dir = normalize_path(&cd);
-    				}
-    				else {
-  		  				current_dir = cd;
-    				}
+				let mut cd = new_path.clone();
+    			if cd.contains("..") {
+    				new_path = normalize_path(&cd);
+    			}
+    			
+    			if somnia::std::check_fs_entry_exists(&new_path) == 1 || &new_path == "/"{
+  		  			current_dir = new_path;
     			}
     			else {
     				println!("path does not exist");
@@ -188,6 +188,24 @@ async fn user_main() {
     				println!("");
     			}
     			print!(">");
+    		},
+
+    		&"run" => {
+   				if parts.len() < 2 {
+    				println!("specify file name like 'run my_file'");
+    				print!(">");
+    				input = "".to_string();
+    				continue
+    			}
+    			
+    			let mut path = parse_path(&current_dir, &mut parts[1].to_string());
+    			if somnia::std::check_fs_entry_exists(&path) == 1 {
+    				somnia::std::run(&path);
+    			}
+    			else {
+    				println!("file with such name does not exist");
+    				print!(">");
+    			}
     		},
     		
   			_ => { 

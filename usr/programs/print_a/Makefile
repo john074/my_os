@@ -6,10 +6,9 @@ BUILD_DIR = target/$(TARGET)/debug
 all: build
 
 build:
-	RUSTFLAGS="-C link-arg=-Ttext=0x444444640000 -C link-arg=--nmagic" \
+	RUSTFLAGS="-C link-arg=-Ttext=0x444444940000 -C link-arg=--nmagic" \
 	    cargo +nightly build --release -Z build-std=core,alloc --target=$(TARGET).json
-	mcopy -i ../fat32.img target/x86_64-my_os/release/somnia ::
-	#cp -f ../test_program/fat32.img ../my_os/fat32.img
+	mcopy -i ../fat32.img target/x86_64-my_os/release/PRINT_A ::
 	  
 clean:
 	cargo clean

@@ -10,6 +10,9 @@ STD_DIR := usr/std
 all: usr build assembler link iso run
 
 usr:
+	dd if=/dev/zero of=usr/programs/fat32.img bs=512 count=288000
+	mkfs.vfat -F 32 usr/programs/fat32.img
+
 	@for dir in $(PROGRAM_DIRS); do \
 		echo "Copying std to $$dir/src/"; \
 		cp -r $(STD_DIR) $$dir/src/ || exit 1; \

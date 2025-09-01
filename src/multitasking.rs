@@ -9,6 +9,8 @@ use crossbeam_queue::ArrayQueue;
 
 use crate::cpu;
 
+pub static mut EXECUTOR_PTR: *mut Executor = core::ptr::null_mut();
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TaskId(pub u64);
 
@@ -18,7 +20,6 @@ impl TaskId {
 		TaskId(NEXT_ID.fetch_add(1, Ordering::Relaxed))
 	}
 }
-
 
 pub struct Task {
 	pub id: TaskId,
@@ -39,8 +40,8 @@ impl Task {
 }
 
 pub struct Executor {
-	tasks: BTreeMap<TaskId, Task>,
-	task_queue: Arc<ArrayQueue<TaskId>>,
+	pub tasks: BTreeMap<TaskId, Task>,
+	pub task_queue: Arc<ArrayQueue<TaskId>>,
 	waker_cache: BTreeMap<TaskId, Waker>,
 	pub current_task: Option<TaskId>,
 }

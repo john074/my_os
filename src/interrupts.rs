@@ -20,8 +20,6 @@ pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
 
 pub static PICS: Mutex<ChainedPics> = Mutex::new(unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) });
 
-static mut SCANCODE_STREAM: Option<keyboard::ScancodeStream> = None; 
-
 #[repr(align(8), C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Registers {
@@ -220,9 +218,6 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64)
 			let s = unsafe { core::slice::from_raw_parts(ptr, len) };
 			if let Ok(text) = core::str::from_utf8(s) {
 				print!("{}", text);
-				// if text.contains("\n") {
-				// 	print!(">");
-				// }
 			}
 			ret = 0;
 		}
@@ -247,13 +242,12 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64)
 			vga_buffer::WRITER.lock().rm_char();
 			ret = 0;
 		}
-		5 => {
+		5 => { // SYS_SPAWN
     		unsafe {
 		        let raw_ptr = arg1 as *mut multitasking::Task;
-		        //(*raw_ptr).id = multitasking::TaskId::new();
 		        let boxed = Box::from_raw(raw_ptr);
-		        fat32::EXECUTOR_PTR.as_mut().unwrap().spawn(*boxed);
-		        fat32::EXECUTOR_PTR.as_mut().unwrap().run();
+		        multitasking::EXECUTOR_PTR.as_mut().unwrap().spawn(*boxed);
+		        //multitasking::EXECUTOR_PTR.as_mut().unwrap().run();
 		    }
 		    ret = 0;
 		}		
@@ -374,7 +368,18 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64)
 				fs.delete_file(text);
 			}
 			ret = 0;
-		}		
+		}	
+		17 => { // SYS_RUN
+			let ptr = arg1 as *const u8;
+			let len = arg2 as usize;
+			let s = unsafe { core::slice::from_raw_parts(ptr, len) };
+			if let Ok(text) = core::str::from_utf8(s) {
+				let fs = unsafe { &mut *fat32::FS_PTR };
+				let data = fs.read_file(text).unwrap();
+				unsafe { multitasking::EXECUTOR_PTR.as_mut().unwrap().spawn(multitasking::Task::new(run_programm(data))) };
+			}
+			ret = 0;
+		}	
 		_ => {
 			println!("Unknown syscall: {}", number);
 			ret = -1i64 as u64;
@@ -386,6 +391,10 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64)
 	}
 
 	ret
+}
+
+async fn run_programm(data: Vec<u8>) {
+	fat32::load_elf_and_jump(&data);
 }
 
 #[unsafe(no_mangle)]

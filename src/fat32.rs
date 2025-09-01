@@ -14,15 +14,9 @@ use crate::println;
 
 
 pub static mut FS_PTR: *mut FAT32Volume = core::ptr::null_mut();
-
 pub static mut RETURN_ADDR: usize = 0;
-pub static mut EXECUTOR_PTR: *mut multitasking::Executor = core::ptr::null_mut();
 
-pub fn load_elf_and_jump(elf_data: &Vec<u8>, executor: *mut multitasking::Executor) {
-    unsafe {
-        EXECUTOR_PTR = executor;
-    };
-
+pub fn load_elf_and_jump(elf_data: &[u8]) {
     let elf = ElfFile::new(elf_data).expect("Invalid ELF");
 
     for ph in elf.program_iter() {
@@ -57,7 +51,7 @@ pub fn load_elf_and_jump(elf_data: &Vec<u8>, executor: *mut multitasking::Execut
 }
 
 extern "C" fn return_to_kernel() {
-    let executor = unsafe { &mut *EXECUTOR_PTR };
+    let executor = unsafe { &mut *multitasking::EXECUTOR_PTR };
     executor.run();
 }
 
@@ -85,6 +79,19 @@ pub unsafe fn identify_drive() {
     }
 }
 
+// ATA ports
+// 0x1F0: Data Register (read/write)
+// 0x1F1: Error Register
+// 0x1F2: Sector Count
+// 0x1F3: LBA Low
+// 0x1F4: LBA Mid
+// 0x1F5: LBA High
+// 0x1F6: Device/Head
+// 0x1F7: Status/Command
+
+// DF - Device fault
+// DRQ - Data request
+
 #[derive(Copy, Clone)]
 pub struct AtaDevice;
 
@@ -98,14 +105,13 @@ impl AtaDevice {
             while (inb(0x1F7) & 0x80) != 0 {} // BSY
 
             let status = inb(0x1F7);
-            if (status & 0x01) != 0 || (status & 0x20) != 0 {
+            if (status & 0x01) != 0 || (status & 0x20) != 0 { // ERR / DF
                 let error = inb(0x1F1);
                 panic!("ATA Error: Status={:#x}, Error={:#x}", status, error);
             }
 
             let mut timeout = 100_000;
-            while (inb(0x1F7) & 0x08) == 0 {
-                // DRQ
+            while (inb(0x1F7) & 0x08) == 0 { // DRQ
                 timeout -= 1;
                 if timeout == 0 {
                     println!("Timeout on Secondary IDE");
@@ -124,14 +130,14 @@ impl AtaDevice {
 impl BlockDevice for AtaDevice {
     fn read_sector(&mut self, lba: u32, buf: &mut[u8; 512]) {
         unsafe {
-            outb(0x1F6, 0xF0 | ((lba >> 24) & 0x0F) as u8); //Primary slave
+            outb(0x1F6, 0xF0 | ((lba >> 24) & 0x0F) as u8); // Primary slave
             outb(0x1F2, 1); 								// Sectors to read
             outb(0x1F3, (lba & 0xFF) as u8); 				// LBA 0–7
             outb(0x1F4, ((lba >> 8) & 0xFF) as u8); 		// LBA 8–15
             outb(0x1F5, ((lba >> 16) & 0xFF) as u8); 		// LBA 16–23
             outb(0x1F7, 0x20); 								// READ SECTORS
             Self::wait_ready();
-            for i in 0..256 {
+            for i in 0..256 {								// Read 512 bytes (256 words) 
                 let w = inw(0x1F0);
                 buf[i * 2] = (w & 0xFF) as u8;
                 buf[i * 2 + 1] = (w >> 8) as u8;
@@ -150,18 +156,25 @@ impl BlockDevice for AtaDevice {
 
             Self::wait_ready(); 							// DRQ
 
-            for i in 0..256 {
+            for i in 0..256 {								// write 512 bytes (256 words)
                 let lo = buf[i * 2] as u16;
                 let hi = buf[i * 2 + 1] as u16;
                 let word = lo | (hi << 8);
                 outw(0x1F0, word);
             }
 
-            while (inb(0x1F7) & 0x80) != 0 {}
+            while (inb(0x1F7) & 0x80) != 0 {}				// BSY
         }
     }
 }
 
+// File sttributes
+// 0x01 - Read-only
+// 0x02 - Hidden
+// 0x04 - System
+// 0x08 - Volume label
+// 0x10 - Directory
+// 0x20 - Archive
 
 #[derive(Debug, Clone)]
 pub struct DirectoryEntry {
@@ -194,42 +207,56 @@ impl DirectoryEntry {
     }
 }
 
-#[derive(Debug, Clone)]
+
 pub struct FAT {
-    pub entries: Vec<u32>,
+    pub fat_start_lba: u32,
+    pub fat_size_sectors: u32,
+    pub bytes_per_sector: u16,
 }
 
 impl FAT {
-    pub fn next_cluster(&self, current: u32) -> Option<u32> {
-        let val = *self.entries.get(current as usize)?;
-        if val >= 0x0FFFFFF8 { None } else { Some(val) }
-    }
-
-    pub fn allocate_cluster(&mut self) -> Option<u32> {
-        for (i, &entry) in self.entries.iter().enumerate().skip(2) {
-            if entry == 0 {
-                self.entries[i] = 0x0FFFFFFF;
-                return Some(i as u32);
-            }
-        }
-        None
-    }
-
-    pub fn set_next_cluster(&mut self, current: u32, next: u32) {
-        if let Some(slot) = self.entries.get_mut(current as usize) {
-            *slot = next;
+    pub fn new(fat_start_lba: u32, fat_size_sectors: u32, bytes_per_sector: u16) -> Self {
+        FAT {
+            fat_start_lba,
+            fat_size_sectors,
+            bytes_per_sector,
         }
     }
 
-    pub fn free_cluster_chain(&mut self, mut cluster: u32) {
-        while cluster < 0x0FFFFFF8 {
-            let next = self.entries[cluster as usize];
-            self.entries[cluster as usize] = 0;
-            if next >= 0x0FFFFFF8 { break; }
-            cluster = next;
-        }
+    fn read_entry(&self, device: &mut dyn BlockDevice, cluster: u32) -> u32 {
+        let fat_offset = cluster * 4;
+        let sector = fat_offset / self.bytes_per_sector as u32;
+        let offset = fat_offset % self.bytes_per_sector as u32;
+
+        let mut buf = [0u8; 512];
+        device.read_sector(self.fat_start_lba + sector, &mut buf);
+        u32::from_le_bytes([				// read 4 bytes as u32
+            buf[offset as usize],
+            buf[offset as usize + 1],
+            buf[offset as usize + 2],
+            buf[offset as usize + 3],
+        ]) & 0x0FFFFFFF						// hide 4 high bytes (reserved)
+    }
+
+    fn write_entry(&self, device: &mut dyn BlockDevice, cluster: u32, value: u32) {
+        let fat_offset = cluster * 4;
+        let sector = fat_offset / self.bytes_per_sector as u32;
+        let offset = fat_offset % self.bytes_per_sector as u32;
+
+        let mut buf = [0u8; 512];
+        device.read_sector(self.fat_start_lba + sector, &mut buf);
+
+		// replace 4 bytes of read data
+        buf[offset as usize..offset as usize + 4].copy_from_slice(&value.to_le_bytes());
+        device.write_sector(self.fat_start_lba + sector, &buf);
     }
 }
+
+// 0x00000000 - free
+// 0x00000001 - reserved
+// 0x0FFFFFF7 - bad cluster
+// 0x0FFFFFF8 - 0x0FFFFFFF - chain end
+
 
 pub struct FAT32Volume {
     pub fat: FAT,
@@ -243,9 +270,64 @@ pub struct FAT32Volume {
     pub num_fats: u8,
 }
 
-
+// dir structure (32 bytes)
+// 0-10: name (8.3)
+// 11: attrib
+// 12: reserved
+// 13: creation timr (tenth of a sec)
+// 14-15: creation time
+// 16-17: creation date
+// 18-19: last access
+// 20-21: high
+// 22-23: last modification time
+// 24-25: last modification date
+// 26-27: low
+// 28-32: size 
+// 
+// 0x00 - end
+// 0xE5 - removed
+// 0x0F - LFN
 
 impl FAT32Volume {
+    pub fn next_cluster(&mut self, current: u32) -> Option<u32> {
+        let val = self.fat.read_entry(&mut *self.device, current);
+        if val >= 0x0FFFFFF8 {		// last?
+            None
+        } else {
+            Some(val)
+        }
+    }
+
+    pub fn allocate_cluster(&mut self) -> Option<u32> {
+        let entries_per_sector = self.bytes_per_sector as u32 / 4;
+        let total_entries = self.fat_size_sectors * entries_per_sector;
+
+        let mut buf = [0u8; 512];
+        for i in 2..total_entries {
+            let val = self.fat.read_entry(&mut *self.device, i);
+            if val == 0 {		// if free
+                self.fat.write_entry(&mut *self.device, i, 0x0FFFFFFF);
+                return Some(i);  // cluster num
+            }
+        }
+        None
+    }
+
+    pub fn set_next_cluster(&mut self, current: u32, next: u32) {
+        self.fat.write_entry(&mut *self.device, current, next);
+    }
+
+    pub fn free_cluster_chain(&mut self, mut cluster: u32) {
+        while cluster < 0x0FFFFFF8 {
+            let next = self.fat.read_entry(&mut *self.device, cluster);
+            self.fat.write_entry(&mut *self.device, cluster, 0); // set as free
+            if next >= 0x0FFFFFF8 {
+                break;
+            }
+            cluster = next;
+        }
+    }
+
     pub fn read_cluster(&mut self, cluster: u32) -> Vec<u8> {
         let start_lba = self.first_sector_of_cluster(cluster);
         let mut buf = vec![0u8; self.cluster_size];
@@ -256,7 +338,6 @@ impl FAT32Volume {
             let offset = i as usize * self.bytes_per_sector as usize;
             buf[offset..offset + 512].copy_from_slice(&sector);
         }
-
         buf
     }
 
@@ -330,11 +411,11 @@ impl FAT32Volume {
                 return Err("Too many entries in directory");
             }
     
-            data[offset..offset + 11].copy_from_slice(&entry.name);
-            data[offset + 11] = entry.attr;
-            data[offset + 20..offset + 22].copy_from_slice(&entry.cluster_high.to_le_bytes());
-            data[offset + 26..offset + 28].copy_from_slice(&entry.cluster_low.to_le_bytes());
-            data[offset + 28..offset + 32].copy_from_slice(&entry.file_size.to_le_bytes());
+            data[offset..offset + 11].copy_from_slice(&entry.name); 								// name 
+            data[offset + 11] = entry.attr; 														// attib	
+            data[offset + 20..offset + 22].copy_from_slice(&entry.cluster_high.to_le_bytes());		// high
+            data[offset + 26..offset + 28].copy_from_slice(&entry.cluster_low.to_le_bytes());		// low
+            data[offset + 28..offset + 32].copy_from_slice(&entry.file_size.to_le_bytes());			// size
     
             offset += 32;
         }
@@ -344,14 +425,12 @@ impl FAT32Volume {
     }
     
 
-    
-
     pub fn read_directory(&mut self, cluster: u32) -> Vec<DirectoryEntry> {
         let mut entries = Vec::new();
         let mut current_cluster = cluster;
         while current_cluster < 0x0FFFFFF8 {
             let data = self.read_cluster(current_cluster);
-            for i in 0..(self.cluster_size / 32) {
+            for i in 0..(self.cluster_size / 32) {		// 32 bytes per entry
                 let offset = i * 32;
                 let entry = &data[offset..offset + 32];
                 if entry[0] == 0x00 { return entries; }
@@ -365,7 +444,7 @@ impl FAT32Volume {
                 };
                 entries.push(dir_entry);
             }
-            match self.fat.next_cluster(current_cluster) {
+            match self.next_cluster(current_cluster) {
                 Some(next) => current_cluster = next,
                 None => break,
             }
@@ -408,18 +487,18 @@ impl FAT32Volume {
             for i in 0..(self.cluster_size / 32) {
                 let offset = i * 32;
                 if data[offset] == 0x00 || data[offset] == 0xE5 {
-                    data[offset..offset + 11].copy_from_slice(&entry.name);
-                    data[offset + 11] = entry.attr;
-                    data[offset + 20..offset + 22].copy_from_slice(&entry.cluster_high.to_le_bytes());
-                    data[offset + 26..offset + 28].copy_from_slice(&entry.cluster_low.to_le_bytes());
-                    data[offset + 28..offset + 32].copy_from_slice(&entry.file_size.to_le_bytes());
+                    data[offset..offset + 11].copy_from_slice(&entry.name);									// name
+                    data[offset + 11] = entry.attr;															// attr 
+                    data[offset + 20..offset + 22].copy_from_slice(&entry.cluster_high.to_le_bytes());		// high
+                    data[offset + 26..offset + 28].copy_from_slice(&entry.cluster_low.to_le_bytes());		// low
+                    data[offset + 28..offset + 32].copy_from_slice(&entry.file_size.to_le_bytes());			// size
 
                     self.write_cluster(current_cluster, &data);
                     return Ok(());
                 }
             }
 
-            match self.fat.next_cluster(current_cluster) {
+            match self.next_cluster(current_cluster) {
                 Some(next) => current_cluster = next,
                 None => break,
             }
@@ -444,7 +523,7 @@ impl FAT32Volume {
                 .starting_cluster()
         };
     
-        let new_cluster = self.fat.allocate_cluster().ok_or("No clusters available")?;
+        let new_cluster = self.allocate_cluster().ok_or("No clusters available")?;
     
         let dir_data: &mut [u8] = &mut [0u8; 4096];
     
@@ -493,15 +572,15 @@ impl FAT32Volume {
 
         let mut cluster_chain = Vec::new();
         for _ in 0..clusters_needed {
-            let cluster = self.fat.allocate_cluster().ok_or("No clusters available")?;
+            let cluster = self.allocate_cluster().ok_or("No clusters available")?;
             if let Some(&prev) = cluster_chain.last() {
-                self.fat.set_next_cluster(prev, cluster);
+                self.set_next_cluster(prev, cluster);
             }
             cluster_chain.push(cluster);
         }
 
         if let Some(&last) = cluster_chain.last() {
-            self.fat.set_next_cluster(last, 0x0FFFFFFF); // EOF
+            self.set_next_cluster(last, 0x0FFFFFFF); // EOF
         }
 
         // DirectoryEntry
@@ -540,7 +619,7 @@ impl FAT32Volume {
             result.extend_from_slice(&data[..to_copy as usize]);
             remaining -= to_copy;
 
-            match self.fat.next_cluster(cluster) {
+            match self.next_cluster(cluster) {
                 Some(next) => cluster = next,
                 None => break,
             }
@@ -558,8 +637,8 @@ impl FAT32Volume {
         let mut current_cluster = entry.starting_cluster();
         
         if current_cluster < 2 {
-            current_cluster = self.fat.allocate_cluster().ok_or("No clusters available")?;
-            self.fat.set_next_cluster(current_cluster, 0x0FFFFFFF);
+            current_cluster = self.allocate_cluster().ok_or("No clusters available")?;
+            self.set_next_cluster(current_cluster, 0x0FFFFFFF);
         
             self.set_entry_cluster(path, current_cluster)?;
         }
@@ -573,7 +652,7 @@ impl FAT32Volume {
         cluster_chain_buf[chain_len] = current_cluster;
         chain_len += 1;
     
-        while let Some(next) = self.fat.next_cluster(current_cluster) {
+        while let Some(next) = self.next_cluster(current_cluster) {
             if next >= 0x0FFFFFF8 {
                 break;
             }
@@ -588,10 +667,10 @@ impl FAT32Volume {
         let clusters_needed = (total_size + self.cluster_size - 1) / self.cluster_size;
     
         while chain_len < clusters_needed {
-            let new_cluster = self.fat.allocate_cluster().ok_or("No clusters available")?;
-            self.fat.set_next_cluster(cluster_chain_buf[chain_len - 1], new_cluster);
+            let new_cluster = self.allocate_cluster().ok_or("No clusters available")?;
+            self.set_next_cluster(cluster_chain_buf[chain_len - 1], new_cluster);
             cluster_chain_buf[chain_len] = new_cluster;
-            self.fat.set_next_cluster(new_cluster, 0x0FFFFFFF);
+            self.set_next_cluster(new_cluster, 0x0FFFFFFF);
             chain_len += 1;
         }
     
@@ -611,13 +690,13 @@ impl FAT32Volume {
             offset += to_copy;
         }
     
-        if chain_len > clusters_needed {
-            let to_free = &cluster_chain_buf[clusters_needed..chain_len];
-            self.fat.set_next_cluster(cluster_chain_buf[clusters_needed - 1], 0x0FFFFFFF);
-            for &c in to_free {
-                self.fat.entries[c as usize] = 0;
-            }
-        }
+		if chain_len > clusters_needed {
+		    let to_free = &cluster_chain_buf[clusters_needed..chain_len];
+		    self.set_next_cluster(cluster_chain_buf[clusters_needed - 1], 0x0FFFFFFF);
+		    for &c in to_free {
+		        self.free_cluster_chain(c);
+		    }
+		}
     
         self.update_file_size(path, total_size as u32)?;
         Ok(())
@@ -697,7 +776,7 @@ impl FAT32Volume {
 	                let cluster_low = u16::from_le_bytes([entry[26], entry[27]]);
 	                let cluster_high = u16::from_le_bytes([entry[20], entry[21]]);
 	                let first_cluster = ((cluster_high as u32) << 16) | (cluster_low as u32);
-	                self.fat.free_cluster_chain(first_cluster);
+	                self.free_cluster_chain(first_cluster);
 
 	                // delete
 	                entry[0] = 0xE5;
@@ -706,7 +785,7 @@ impl FAT32Volume {
 	            }
 	        }
 
-	        match self.fat.next_cluster(current_cluster) {
+	        match self.next_cluster(current_cluster) {
 	            Some(next) => current_cluster = next,
 	            None => break,
 	        }
@@ -754,7 +833,7 @@ impl FAT32Volume {
                 }
             }
     
-            match self.fat.next_cluster(current_cluster) {
+            match self.next_cluster(current_cluster) {
                 Some(next) => current_cluster = next,
                 None => break,
             }
@@ -841,9 +920,10 @@ fn to_short_name(name: &str) -> [u8; 11] {
 
 
 pub fn mount_fat32(mut device: Box<dyn BlockDevice>) -> Result<FAT32Volume, &'static str> {
-	println!("Mounting File System...");
+    println!("Mounting File System...");
+
     let mut vbr = [0u8; 512];
-    device.read_sector(0, &mut vbr); // VBR
+    device.read_sector(0, &mut vbr);
 
     let bytes_per_sector = u16::from_le_bytes([vbr[11], vbr[12]]);
     let sectors_per_cluster = vbr[13];
@@ -853,35 +933,20 @@ pub fn mount_fat32(mut device: Box<dyn BlockDevice>) -> Result<FAT32Volume, &'st
     let root_dir_cluster = u32::from_le_bytes([vbr[44], vbr[45], vbr[46], vbr[47]]);
 
     let fat_start_lba = reserved_sector_count as u32;
-    let fat_entry_count = (fat_size_sectors * (bytes_per_sector as u32)) / 4;
-    let mut fat_entries = vec![0u32; fat_entry_count as usize];
 
-    let mut sector_buf = [0u8; 512];
-    let mut entry_index = 0;
-
-    for i in 0..fat_size_sectors {
-        device.read_sector(fat_start_lba + i, &mut sector_buf);
-        for chunk in sector_buf.chunks_exact(4) {
-            if entry_index < fat_entries.len() {
-                fat_entries[entry_index] = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
-                entry_index += 1;
-            }
-        }
-    }
+    let fat = FAT::new(fat_start_lba, fat_size_sectors, bytes_per_sector);
 
     println!("File System    [OK]");
 
-	Ok(FAT32Volume {
-		fat: FAT { entries: fat_entries },
-		cluster_size: bytes_per_sector as usize * sectors_per_cluster as usize,
-		root_dir_cluster,
-		device,
-		sectors_per_cluster,
-		bytes_per_sector,
-		reserved_sector_count,
-		fat_size_sectors,
-		num_fats,
-	})
+    Ok(FAT32Volume {
+        fat,
+        cluster_size: bytes_per_sector as usize * sectors_per_cluster as usize,
+        root_dir_cluster,
+        device,
+        sectors_per_cluster,
+        bytes_per_sector,
+        reserved_sector_count,
+        fat_size_sectors,
+        num_fats,
+    })
 }
-
-
