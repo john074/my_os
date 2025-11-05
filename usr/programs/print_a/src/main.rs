@@ -14,7 +14,7 @@ pub extern "C" fn _start() {
 }
 
 async fn user() {
-    for i in 0..10 {
+    for i in 0..15 {
         println!("A");
         multitasking::cooperate().await;
         sleep(2000);

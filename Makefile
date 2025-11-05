@@ -47,6 +47,7 @@ run:
   -drive file=boot.iso,format=raw,media=cdrom \
   -drive file=fat32.img,format=raw,if=ide,index=1,media=disk \
   -boot order=d \
+  -vga std \
   -serial stdio \
   -machine pc \
   -s

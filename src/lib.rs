@@ -21,12 +21,12 @@ mod multitasking;
 mod keyboard;
 mod fat32;
 mod fs;
+mod framebuffer;
 
 #[macro_use]
 extern crate bitflags;
 #[macro_use]
 extern crate alloc;
-
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
@@ -35,6 +35,8 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	cpu::enable_nxe_bit();
 	cpu::enable_write_protect_bit();
 	memory::init(multiboot_information_address);
+	framebuffer::init(multiboot_information_address);
+	loop{}
 	let executor = Box::new(multitasking::Executor::new());
 	let ata = fat32::AtaDevice::new();
 	let mut boxed_ata = Box::new(ata);
@@ -61,7 +63,6 @@ pub fn hlt_loop() -> ! {
 		cpu::hlt();
 	}
 }
-
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {

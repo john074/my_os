@@ -72,7 +72,6 @@ impl EntryFlags {
 	}
 }
 
-
 pub fn init(multiboot_information_address: usize) {
 	let boot_info = unsafe{ BootInformation::load(multiboot_information_address as *const BootInformationHeader).unwrap() };
 	
@@ -670,8 +669,33 @@ pub fn remap_kernel<A>(allocator: &mut A, boot_info: &BootInformation) -> Active
 			}
 		}
 
+		// Получаем физический адрес и параметры
+		let fb_tag = boot_info.framebuffer_tag().expect("Framebuffer tag missing").unwrap();
+		let fb_addr = fb_tag.address();
+		let width = fb_tag.width() as usize;
+		let height = fb_tag.height() as usize;
+		let pitch = fb_tag.pitch() as usize;
+		let bpp = fb_tag.bpp() as usize;
+			    
+		// Размер фреймбуфера в байтах
+		let fb_size = pitch * height;
+			    
+		// Для простоты округлим до границ страниц
+		let fb_start_frame = Frame::containing_address((fb_addr & !0xFFF) as usize);
+		let fb_end_frame = Frame::containing_address(((fb_addr + fb_size as u64 + 0xFFF) & !0xFFF) as usize);
+			    
+		for frame in Frame::range_inclusive(fb_start_frame, fb_end_frame) {
+        	mapper.identity_map(frame, WRITABLE, allocator);
+		}
+
 		let vga_buffer_frame = Frame::containing_address(0xb8000);
 		mapper.identity_map(vga_buffer_frame, WRITABLE, allocator);
+
+		// let fb_tag = boot_info.framebuffer_tag().expect("Framebuffer tag missing").unwrap();
+		// let fb_addr = fb_tag.address() as usize;
+		// 
+		// let frame_buffer_frame = Frame::containing_address(fb_addr);
+		// mapper.identity_map(frame_buffer_frame, WRITABLE, allocator);
 
 		let multiboot_start = Frame::containing_address(boot_info.start_address());
 		let multiboot_end = Frame::containing_address(boot_info.end_address() - 1);
