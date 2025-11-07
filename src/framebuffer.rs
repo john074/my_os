@@ -1,5 +1,8 @@
 use multiboot2::{ BootInformation, BootInformationHeader };
+use crate::mouse;
+use crate::multitasking;
 
+pub static mut FRAME_BUFFER_PTR: *mut Framebuffer = core::ptr::null_mut();
 static mut DOUBLE_BUF: [u8; 1024 * 768 * 4] = [0; 1024 * 768 * 4];
 
 pub const BLACK:       u32 = 0xFF000000;
@@ -28,7 +31,7 @@ pub struct Framebuffer {
 }
 
 impl Framebuffer {
-    pub fn put_pixel(&mut self, x: usize, y: usize, color: u32) {
+    fn put_pixel(&mut self, x: usize, y: usize, color: u32) {
 	    if x >= self.width || y >= self.height { return; }
 		let offset = y * self.pitch + x * 4; // 4 байта при 32bpp
 
@@ -36,6 +39,19 @@ impl Framebuffer {
 		self.double_buf[offset + 1] = ((color >> 8) & 0xFF) as u8;   // G  
 		self.double_buf[offset + 2] = ((color >> 16) & 0xFF) as u8;  // R
 		self.double_buf[offset + 3] = ((color >> 24) & 0xFF) as u8;  // A
+    }
+
+    pub fn get_pixel(&self, x: isize, y: isize) -> u32 {
+        if x < 0 || y < 0 || (x as usize) >= self.width || (y as usize) >= self.height {
+            return 0;
+        }
+
+        let offset = y as usize * self.pitch + (x as usize) * 4;
+        let b = self.double_buf[offset] as u32;
+        let g = self.double_buf[offset + 1] as u32;
+        let r = self.double_buf[offset + 2] as u32;
+        let a = self.double_buf[offset + 3] as u32;
+        (a << 24) | (r << 16) | (g << 8) | b
     }
     
     pub fn fill_rect(&mut self, x: isize, y: isize, w: isize, h: isize, color: u32) { 
@@ -72,7 +88,7 @@ impl Framebuffer {
         }
     }
 
-    fn put_pixel_safe(&mut self, x: isize, y: isize, color: u32) {
+    pub fn put_pixel_safe(&mut self, x: isize, y: isize, color: u32) {
         if x >= 0 && y >= 0 && (x as usize) < self.width && (y as usize) < self.height {
             self.put_pixel(x as usize, y as usize, color);
         }
@@ -222,4 +238,21 @@ pub unsafe fn init(multiboot_information_address: usize) -> Framebuffer {
 	//draw_house(&mut framebuffer);
 
 	framebuffer
+}
+
+pub async fn gui_loop(fb: &mut Framebuffer) {
+	unsafe {
+		let mouse = &mut *mouse::MOUSE_PTR;
+		loop {
+			
+			if mouse.x != mouse::MOUSE_X || mouse.y != mouse::MOUSE_Y {
+				mouse.erase(fb);
+				mouse.x = mouse::MOUSE_X;
+				mouse.y = mouse::MOUSE_Y;
+				mouse.draw(fb);
+				fb.draw_frame();
+			}
+			multitasking::cooperate().await;
+		}
+	}
 }

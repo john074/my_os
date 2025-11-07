@@ -14,6 +14,8 @@ use crate::fat32;
 use crate::multitasking;
 use crate::memory;
 use crate::vga_buffer;
+use crate::framebuffer;
+use crate::mouse;
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
@@ -40,6 +42,7 @@ pub struct Registers {
 pub enum InterruptIndex {
 	Timer = PIC_1_OFFSET,
 	Keyboard,
+	Mouse = PIC_1_OFFSET + 12,
 }
 
 impl InterruptIndex {
@@ -82,6 +85,7 @@ lazy_static! {
 		idt[InterruptIndex::Timer.as_usize()].set_handler_fn(timer_interrupt_handler);
 		idt[InterruptIndex::Keyboard.as_usize()].set_handler_fn(keyboard_interrupt_handler);
 
+		idt[(PIC_1_OFFSET + 12) as usize].set_handler_fn(mouse_handler);
 		idt[(PIC_1_OFFSET + 14) as usize].set_handler_fn(irq14_handler);
 		
 		//idt[0x80].set_handler_fn(syscall_interrupt_handler);
@@ -95,6 +99,29 @@ lazy_static! {
 }
 
 fn default_handler() {}
+
+pub extern "x86-interrupt" fn mouse_handler(_stack_frame: InterruptStackFrame) {
+	use x86_64::instructions::port::{Port};
+    unsafe {
+        let mut port = Port::<u8>::new(0x60);
+        let packet = [
+            port.read(),
+            port.read(),
+            port.read(),
+        ];
+
+        let dx = packet[1] as i8 as isize;
+        let dy = -(packet[2] as i8 as isize);
+
+        mouse::MOUSE_X = (mouse::MOUSE_X + dx).clamp(0, 1023);
+        mouse::MOUSE_Y = (mouse::MOUSE_Y + dy).clamp(0, 767);
+
+		// let fb = unsafe { &mut *framebuffer::FRAME_BUFFER };
+  		// framebuffer::draw_mouse_cursor(fb);
+        
+        PICS.lock().notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
+    }
+}
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
 	unsafe {
@@ -119,19 +146,27 @@ extern "x86-interrupt" fn general_protection_fault_handler(stack_frame: Interrup
 }
 
 extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame, _error_code: u64) -> ! {
+    let fb = unsafe { &mut *framebuffer::FRAME_BUFFER_PTR };
+   	fb.fill_screen(0xFFFF0000);
 	panic!("EXCEPTION: DOUBLE FAULT\n{:#?}", stack_frame);
 }
 
 extern "x86-interrupt" fn page_fault_handler(stack_frame: InterruptStackFrame, error_code: PageFaultErrorCode) {
     let addr = x86_64::registers::control::Cr2::read();
+    let fb = unsafe { &mut *framebuffer::FRAME_BUFFER_PTR };
+   	fb.fill_screen(0xFF00FF00);
     panic!("Page Fault at {:#x}, error: {:?}\n{:#?}", addr, error_code, stack_frame);
 }
 
 extern "x86-interrupt" fn stack_segment_fault_handler(stack_frame: InterruptStackFrame, error_code: u64) {
+    let fb = unsafe { &mut *framebuffer::FRAME_BUFFER_PTR };
+   	fb.fill_screen(0xFFFFFF00);
     panic!("EXCEPTION: STACK SEGMENT FAULT\nStack Frame: {:#?}\nError: {:?}", stack_frame, error_code);
 }
 
 extern "x86-interrupt" fn segment_not_present_handler(stack_frame: InterruptStackFrame, error_code: u64) {
+    let fb = unsafe { &mut *framebuffer::FRAME_BUFFER_PTR };
+   	fb.fill_screen(0xFF800080‎);
     panic!("EXCEPTION: SEGMENT NOT PRESENT\nStack Frame: {:#?}\nError: {:?}", stack_frame, error_code);
 }
 
