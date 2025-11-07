@@ -1,9 +1,24 @@
+// #[unsafe(no_mangle)]
+// pub extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+//     for i in 0..n {
+//         unsafe { *dest.add(i) = *src.add(i); }
+//     }
+//     dest
+// }
+
+#[cfg(target_arch = "x86_64")]
+#[naked]
 #[unsafe(no_mangle)]
-pub extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
-    for i in 0..n {
-        unsafe { *dest.add(i) = *src.add(i); }
-    }
-    dest
+pub unsafe extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
+	unsafe {
+	    core::arch::naked_asm!(
+	        "mov rcx, rdx",
+	        "rep movsb",
+	        "mov rax, rdi",
+	        "ret",
+	        options()
+	    )
+	}
 }
 
 #[unsafe(no_mangle)]
@@ -41,6 +56,7 @@ pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mu
     }
     dest
 }
+
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn strlen(s: *const u8) -> usize {

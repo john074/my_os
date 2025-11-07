@@ -30,12 +30,12 @@ extern crate alloc;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
-	vga_buffer::WRITER.lock().set_foreground_color(vga_buffer::Color::Green);
-	interrupts::init();
-	cpu::enable_nxe_bit();
-	cpu::enable_write_protect_bit();
+	//vga_buffer::WRITER.lock().set_foreground_color(vga_buffer::Color::Green);
+	//interrupts::init();
+	//cpu::enable_nxe_bit();
+	//cpu::enable_write_protect_bit();
 	memory::init(multiboot_information_address);
-	framebuffer::init(multiboot_information_address);
+	unsafe { framebuffer::init(multiboot_information_address); }
 	loop{}
 	let executor = Box::new(multitasking::Executor::new());
 	let ata = fat32::AtaDevice::new();
