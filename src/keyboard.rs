@@ -10,7 +10,6 @@ use spin::Mutex;
 
 use crate::println;
 use crate::print;
-use crate::vga_buffer;
 
 static SCANCODE_QUEUE: OnceCell<ArrayQueue<u8>> = OnceCell::uninit();
 static WAKER: AtomicWaker = AtomicWaker::new();

@@ -1,6 +1,18 @@
 use multiboot2::{ BootInformation, BootInformationHeader };
+use core::fmt::{self, Write};
+use spin::Mutex;
+use lazy_static::lazy_static;
+
 use crate::mouse;
 use crate::multitasking;
+use crate::fonts;
+
+lazy_static! {
+    pub static ref FB_WRITER: Mutex<FramebufferWriter> = Mutex::new(FramebufferWriter::new());
+}
+
+#[allow(static_mut_refs)]
+pub static mut FRAMEBUFFER: Option<Framebuffer> = None;
 
 pub static mut FRAME_BUFFER_PTR: *mut Framebuffer = core::ptr::null_mut();
 static mut DOUBLE_BUF: [u8; 1024 * 768 * 4] = [0; 1024 * 768 * 4];
@@ -163,6 +175,31 @@ impl Framebuffer {
         }
     }
 
+    pub fn draw_char(&mut self, x: isize, y: isize, c: char, color: u32) {
+        let idx = c as usize;
+        if idx >= 128 { return; }
+        let bitmap = fonts::FONT8X8_BASIC[idx];
+        for (row, bits) in bitmap.iter().enumerate() {
+            for col in 0..8 {
+                if (bits >> col) & 1 != 0 {
+                    self.put_pixel_safe(x + col as isize, y + row as isize, color);
+                }
+            }
+        }
+    }
+
+    pub fn draw_string(&mut self, mut x: isize, mut y: isize, text: &str, color: u32) {
+        for c in text.chars() {
+            match c {
+                '\n' => { y += 8; x = 0; },
+                _ => {
+                    self.draw_char(x, y, c, color);
+                    x += 8;
+                }
+            }
+        }
+    }
+
 	pub fn draw_frame(&mut self) {
 	    unsafe {
 	        let src = self.double_buf.as_ptr();
@@ -176,7 +213,83 @@ impl Framebuffer {
 	}
 }
 
-pub fn test_colors(framebuffer: &mut Framebuffer) {
+pub struct FramebufferWriter {
+    fb: Option<&'static mut Framebuffer>,
+    x: isize,
+    y: isize,
+    color: u32,
+}
+
+impl FramebufferWriter {
+    pub const fn new() -> Self {
+        Self {
+            fb: None,
+            x: 0,
+            y: 0,
+            color: WHITE,
+        }
+    }
+
+    pub fn set_framebuffer(&mut self, fb: &'static mut Framebuffer) {
+        self.fb = Some(fb);
+    }
+
+    pub fn set_color(&mut self, color: u32) {
+        self.color = color;
+    }
+}
+
+impl Write for FramebufferWriter {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        if let Some(fb) = &mut self.fb {
+            for c in s.chars() {
+                match c {
+                    '\n' => {
+                        self.y += 8;
+                        self.x = 0;
+                    }
+                    _ => {
+                        fb.draw_char(self.x, self.y, c, self.color);
+                        self.x += 8;
+                        if self.x >= fb.width as isize {
+                            self.x = 0;
+                            self.y += 8;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+unsafe impl Send for FramebufferWriter {}
+unsafe impl Sync for FramebufferWriter {}
+
+
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => ({
+        use core::fmt::Write;
+        use x86_64::instructions::interrupts;
+
+        interrupts::without_interrupts(|| {
+            let mut writer = $crate::framebuffer::FB_WRITER.lock();
+            writer.write_fmt(format_args!($($arg)*)).unwrap();
+        });
+    });
+}
+
+#[macro_export]
+macro_rules! println {
+    () => ($crate::print!("\n"));
+    ($($arg:tt)*) => ($crate::print!("{}\n", format_args!($($arg)*)));
+}
+
+#[allow(static_mut_refs)]
+pub fn test_colors() {
+	let framebuffer = unsafe { FRAMEBUFFER.as_mut().unwrap() };
+
     framebuffer.fill_rect(0, 0, 100, 100, RED);
     framebuffer.fill_rect(100, 0, 100, 100, GREEN);
     framebuffer.fill_rect(200, 0, 100, 100, BLUE);
@@ -191,6 +304,7 @@ pub fn test_colors(framebuffer: &mut Framebuffer) {
     framebuffer.fill_rect(400, 100, 100, 100, MAGENTA);
     framebuffer.fill_rect(500, 100, 100, 100, ORANGE);
     framebuffer.fill_rect(600, 100, 100, 100, BROWN);
+    framebuffer.draw_string(10, 250, "Test of text. 123456789!,>#", WHITE);
     framebuffer.draw_frame();
 }
 
@@ -216,7 +330,7 @@ pub fn draw_house(framebuffer: &mut Framebuffer) {
 }
 
 #[allow(static_mut_refs)]
-pub unsafe fn init(multiboot_information_address: usize) -> Framebuffer {
+pub unsafe fn init(multiboot_information_address: usize) -> &'static mut Framebuffer {
 	let boot_info = unsafe{ BootInformation::load(multiboot_information_address as *const BootInformationHeader).unwrap() };
 	let fb_tag = boot_info.framebuffer_tag().expect("Framebuffer tag missing").unwrap();
 	let buf_size = fb_tag.height() as usize * fb_tag.pitch() as usize;
@@ -224,34 +338,32 @@ pub unsafe fn init(multiboot_information_address: usize) -> Framebuffer {
 	let double_buf = unsafe {
 	    &mut DOUBLE_BUF[..buf_size.min(DOUBLE_BUF.len())]
 	};
-	
-	let mut framebuffer = Framebuffer{
-		buf: fb_tag.address() as *mut u8,
-		width: fb_tag.width() as usize,
-		height: fb_tag.height() as usize,
-		pitch: fb_tag.pitch() as usize,
-		bpp: fb_tag.bpp() as usize,
-		double_buf
-	};
 
-	test_colors(&mut framebuffer);
-	//draw_house(&mut framebuffer);
+	FRAMEBUFFER = Some(Framebuffer {
+	    buf: fb_tag.address() as *mut u8,
+	    width: fb_tag.width() as usize,
+	    height: fb_tag.height() as usize,
+	    pitch: fb_tag.pitch() as usize,
+	    bpp: fb_tag.bpp() as usize,
+	    double_buf,
+	});
 
-	framebuffer
+	FRAMEBUFFER.as_mut().unwrap()
 }
 
-pub async fn gui_loop(fb: &mut Framebuffer) {
+#[allow(static_mut_refs)]
+pub async fn gui_loop() {
 	unsafe {
-		let mouse = &mut *mouse::MOUSE_PTR;
+		let fb = FRAMEBUFFER.as_mut().unwrap();
+		//let mouse = &mut *mouse::MOUSE_PTR;
 		loop {
-			
-			if mouse.x != mouse::MOUSE_X || mouse.y != mouse::MOUSE_Y {
-				mouse.erase(fb);
-				mouse.x = mouse::MOUSE_X;
-				mouse.y = mouse::MOUSE_Y;
-				mouse.draw(fb);
-				fb.draw_frame();
-			}
+			// if mouse.x != mouse::MOUSE_X || mouse.y != mouse::MOUSE_Y {
+			// 	mouse.erase(fb);
+			// 	mouse.x = mouse::MOUSE_X;
+			// 	mouse.y = mouse::MOUSE_Y;
+			// 	mouse.draw(fb);
+			// }
+			fb.draw_frame();
 			multitasking::cooperate().await;
 		}
 	}

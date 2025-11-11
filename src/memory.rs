@@ -82,7 +82,7 @@ pub fn init(multiboot_information_address: usize) {
 	
 	let elf_sections_tag = boot_info.elf_sections().expect("Elf-sections tag required");
 	let kernel_end = elf_sections_tag.map(|s| s.start_address()).max().unwrap();
-	println!("Kernel start: {:#x}, kernel end: {:#x}", kernel_start, kernel_end);
+	//println!("Kernel start: {:#x}, kernel end: {:#x}", kernel_start, kernel_end);
 		
 	let multiboot_start = multiboot_information_address;
 	let multiboot_end = multiboot_start + (boot_info.total_size());
@@ -101,7 +101,7 @@ pub fn init(multiboot_information_address: usize) {
 		ALLOCATOR.lock().init(HEAP_START, HEAP_SIZE);
 	}
 		
-	println!("Memory initialization    [OK]");
+	//println!("Memory initialization    [OK]");
 }
 
 //******* Frame Allocator *******\\
@@ -636,7 +636,7 @@ impl ActivePageTable {
 }
 
 pub fn remap_kernel<A>(allocator: &mut A, boot_info: &BootInformation) -> ActivePageTable where A: FrameAllocator {
-	println!("Remapping kernel.");
+	//println!("Remapping kernel.");
 	let mut temporary_page = TemporaryPage::new(Page { number: 0x123456789 }, allocator);
 	let mut active_table = unsafe { ActivePageTable::new() };
 	let mut new_table = {
@@ -653,11 +653,11 @@ pub fn remap_kernel<A>(allocator: &mut A, boot_info: &BootInformation) -> Active
 			}
 
 			if section.start_address() as usize % PAGE_SIZE != 0 {
-			    println!("Skipping non-page-aligned section at address: {:#x}, size: {:#x}", section.start_address(), section.size());
+			    //println!("Skipping non-page-aligned section at address: {:#x}, size: {:#x}", section.start_address(), section.size());
 			    continue;
 			}
 			
-			println!("Mapping section at address: {:#x}, size: {:#x}", section.start_address(), section.size());
+			//println!("Mapping section at address: {:#x}, size: {:#x}", section.start_address(), section.size());
 			//assert!(section.start_address() as usize % PAGE_SIZE == 0, "sections need to be page aligned");
 
 			let flags = EntryFlags::from_elf_section_flags(&section);
@@ -705,11 +705,11 @@ pub fn remap_kernel<A>(allocator: &mut A, boot_info: &BootInformation) -> Active
 	});
 
 	let old_table = active_table.switch(new_table);
-	println!("Page table successfuly swaped.");
+	//println!("Page table successfuly swaped.");
 
 	let old_p4_page = Page::containing_address(old_table.p4_frame.start_address());
 	active_table.unmap(old_p4_page, allocator);
-	println!("Guard page at {:#x}.", old_p4_page.start_address());
+	//println!("Guard page at {:#x}.", old_p4_page.start_address());
 
 	active_table
 }
@@ -942,7 +942,6 @@ unsafe impl GlobalAlloc for Locked<LinkedListAllocator> {
 	}
 
 	unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-		println!("...");
 		let (size, _) = LinkedListAllocator::size_align(layout);
 		unsafe {
 			self.lock().add_free_region(ptr as usize, size)
