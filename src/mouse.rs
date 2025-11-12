@@ -49,21 +49,48 @@ fn ps2_read_data() -> u8 {
     }
 }
 
+fn pic_unmask_irq_master(bit: u8) {
+    unsafe {
+        let mut port = Port::<u8>::new(0x21);
+        let mut mask = port.read();
+        mask &= !(1 << bit);
+        port.write(mask);
+    }
+}
+
+fn pic_unmask_irq_slave(bit: u8) {
+    unsafe {
+        let mut port = Port::<u8>::new(0xA1);
+        let mut mask = port.read();
+        mask &= !(1 << bit);
+        port.write(mask);
+    }
+}
+
 pub fn init_mouse() -> Mouse {
-	ps2_write_cmd(0xA8);
-	    
-	ps2_write_cmd(0x20);
-	let mut status = ps2_read_data();
-	   	
-	status |= 0x02; // IRQ12 enable
-	ps2_write_cmd(0x60);
-	ps2_write_data(status);
+    ps2_write_cmd(0xA8); // enable second port
 
-	ps2_write_cmd(0xD4);
-	ps2_write_data(0xF4); // Enable data reporting
-	ps2_read_data(); // ACK (0xFA)
+    ps2_write_cmd(0x20); // read current cfg
+    let mut cfg = ps2_read_data();
 
-	Mouse::new()
+    // set bits: enable irq1 and irq12, ensure clk bits cleared, enable translator
+    cfg |= 1 << 0;   // IRQ1 (keyboard) enable
+    cfg |= 1 << 1;   // IRQ12 (mouse) enable
+    cfg &= !(1 << 4); // keyboard clock enable (bit4=0)
+    cfg &= !(1 << 5); // mouse clock enable (bit5=0)
+    cfg |= 1 << 6;   // enable translation (bit6=1)
+
+    ps2_write_cmd(0x60);
+    ps2_write_data(cfg);
+
+    ps2_write_cmd(0xD4);
+    ps2_write_data(0xF4); // Enable data reporting
+    let _ack = ps2_read_data(); // ACK (0xFA)
+
+    pic_unmask_irq_master(1); // keyboard
+    pic_unmask_irq_slave(4);  // mouse
+
+    Mouse::new()
 }
 
 pub struct Mouse {
@@ -118,4 +145,3 @@ impl Mouse {
         self.prev_y = self.y;
     }
 }
-

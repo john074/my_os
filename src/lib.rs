@@ -43,7 +43,11 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	
 	framebuffer.fill_screen(framebuffer::BLACK);
 	framebuffer.draw_frame();
-	
+
+	let mut mouse = mouse::init_mouse();
+	unsafe { mouse::MOUSE_PTR = &mut mouse as *mut mouse::Mouse; }
+	framebuffer.draw_frame();
+
 	interrupts::init();
 	framebuffer.draw_frame();
 	
@@ -52,10 +56,6 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	
 	cpu::enable_write_protect_bit();
 	framebuffer.draw_frame();
-
-	// let mut mouse = mouse::init_mouse();
-	// unsafe { mouse::MOUSE_PTR = &mut mouse as *mut mouse::Mouse; }
-	// framebuffer.draw_frame();
 	
 	let executor = Box::new(multitasking::Executor::new());
 	framebuffer.draw_frame();

@@ -14,7 +14,6 @@ lazy_static! {
 #[allow(static_mut_refs)]
 pub static mut FRAMEBUFFER: Option<Framebuffer> = None;
 
-pub static mut FRAME_BUFFER_PTR: *mut Framebuffer = core::ptr::null_mut();
 static mut DOUBLE_BUF: [u8; 1024 * 768 * 4] = [0; 1024 * 768 * 4];
 
 pub const BLACK:       u32 = 0xFF000000;
@@ -355,14 +354,14 @@ pub unsafe fn init(multiboot_information_address: usize) -> &'static mut Framebu
 pub async fn gui_loop() {
 	unsafe {
 		let fb = FRAMEBUFFER.as_mut().unwrap();
-		//let mouse = &mut *mouse::MOUSE_PTR;
+		let mouse = &mut *mouse::MOUSE_PTR;
 		loop {
-			// if mouse.x != mouse::MOUSE_X || mouse.y != mouse::MOUSE_Y {
-			// 	mouse.erase(fb);
-			// 	mouse.x = mouse::MOUSE_X;
-			// 	mouse.y = mouse::MOUSE_Y;
-			// 	mouse.draw(fb);
-			// }
+			if mouse.x != mouse::MOUSE_X || mouse.y != mouse::MOUSE_Y {
+				mouse.erase(fb);
+				mouse.x = mouse::MOUSE_X;
+				mouse.y = mouse::MOUSE_Y;
+				mouse.draw(fb);
+			}
 			fb.draw_frame();
 			multitasking::cooperate().await;
 		}

@@ -100,25 +100,41 @@ lazy_static! {
 
 fn default_handler() {}
 
+static mut MOUSE_PACKET: [u8; 3] = [0; 3];
+static mut MOUSE_PHASE: usize = 0;
+
 pub extern "x86-interrupt" fn mouse_handler(_stack_frame: InterruptStackFrame) {
 	use x86_64::instructions::port::{Port};
     unsafe {
-        let mut port = Port::<u8>::new(0x60);
-        let packet = [
-            port.read(),
-            port.read(),
-            port.read(),
-        ];
+        let status: u8 = Port::<u8>::new(0x64).read();
 
-        let dx = packet[1] as i8 as isize;
-        let dy = -(packet[2] as i8 as isize);
+        if (status & 0x01) == 0 {
+            PICS.lock().notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
+            return;
+        }
 
-        mouse::MOUSE_X = (mouse::MOUSE_X + dx).clamp(0, 1023);
-        mouse::MOUSE_Y = (mouse::MOUSE_Y + dy).clamp(0, 767);
+        // make sure the byte is sent by a auxiliary device (mouse)
+        if (status & 0x20) == 0 {
+            PICS.lock().notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
+            return;
+        }
 
-		// let fb = unsafe { &mut *framebuffer::FRAME_BUFFER };
-  		// framebuffer::draw_mouse_cursor(fb);
-        
+        let mut data_port = Port::<u8>::new(0x60);
+        let byte = data_port.read();
+        MOUSE_PACKET[MOUSE_PHASE] = byte;
+        MOUSE_PHASE += 1;
+
+        if MOUSE_PHASE >= 3 {
+            let packet = MOUSE_PACKET;
+            MOUSE_PHASE = 0;
+
+            let dx = packet[1] as i8 as isize;
+            let dy = -(packet[2] as i8 as isize);
+
+            mouse::MOUSE_X = (mouse::MOUSE_X + dx).clamp(0, 1023);
+            mouse::MOUSE_Y = (mouse::MOUSE_Y + dy).clamp(0, 767);
+        }
+
         PICS.lock().notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());
     }
 }
