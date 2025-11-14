@@ -1,3 +1,41 @@
+use alloc::vec::Vec;
+
+pub struct Font {
+    data: Vec<u8>,
+    height: usize,
+    width: usize,
+    first_char: usize,
+    max_chars: usize,
+}
+
+impl Font {
+    pub fn load_from_bytes(font_data: &[u8], height: usize) -> Self {
+        Font {
+            data: font_data.to_vec(),
+            height,
+            width: 8,
+            first_char: 0,
+            max_chars: 256,
+        }
+    }
+    
+    pub fn get_char_bitmap(&self, c: char) -> Option<&[u8]> {
+        let idx = c as usize;
+        if idx >= self.max_chars {
+            return None;
+        }
+        
+        let start = idx * self.height;
+        let end = start + self.height;
+        
+        if end <= self.data.len() {
+            Some(&self.data[start..end])
+        } else {
+            None
+        }
+    }
+}
+
 pub const FONT8X8_BASIC: [[u8; 8 ]; 128 ] = [
     [ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ],   // U+0000 (nul)
     [ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 ],   // U+0001

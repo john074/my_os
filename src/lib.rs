@@ -61,10 +61,12 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	framebuffer.draw_frame();
 	
 	let ata = fat32::AtaDevice::new();
-	let mut boxed_ata = Box::new(ata);
+	let boxed_ata = Box::new(ata);
 	framebuffer.draw_frame();
 	let mut fs = fat32::mount_fat32(boxed_ata).unwrap();
 	framebuffer.draw_frame();
+
+	framebuffer.fill_screen(framebuffer::BLACK);
 	
 	unsafe {
 	    multitasking::EXECUTOR_PTR = Box::into_raw(executor);

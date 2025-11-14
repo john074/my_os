@@ -25,6 +25,8 @@ async fn user_main() {
     let mut current_dir: String  = "/".to_string();
 	let mut input: String = "".to_string();
 	let mut current_command_buffer: Vec<char> = Vec::new();
+
+	current_command_buffer.push('>');
     
     loop {
     	somnia::std::read((&mut buf as *mut Vec<char>) as u64);
@@ -34,10 +36,15 @@ async fn user_main() {
 			if i == '\n' {
 				println!("");
 				print!(">");
+				current_command_buffer.remove(0);
 				input = current_command_buffer.iter().collect();
 				current_command_buffer.clear();
+				current_command_buffer.push('>');
 			}
 			else if i == '\x08' {
+				if current_command_buffer.len() == 1 {
+					continue;
+				}
 				current_command_buffer.pop();
 				somnia::std::rm_char();
 			}
@@ -184,9 +191,7 @@ async fn user_main() {
     		}
 
     		&"clear" => {
-    			for _ in 0..25 {
-    				println!("");
-    			}
+				somnia::std::clear_screen();
     			print!(">");
     		},
 

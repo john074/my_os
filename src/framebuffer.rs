@@ -34,11 +34,12 @@ pub const PINK:        u32 = 0xFFFFC0CB;
 
 pub struct Framebuffer {
     buf: *mut u8,
-    width: usize,
-    height: usize,
+    pub width: usize,
+    pub height: usize,
     pitch: usize,
     bpp: usize,
     double_buf: &'static mut [u8],
+    font: fonts::Font,
 }
 
 impl Framebuffer {
@@ -152,7 +153,7 @@ impl Framebuffer {
         self.draw_line(x2, y2, x0, y0, color);
     }
 
-    pub fn fill_triangle(&mut self, mut x0: isize, mut y0: isize, mut x1: isize, mut y1: isize, mut x2: isize, mut y2: isize, color: u32) {
+    pub fn fill_triangle(&mut self, x0: isize, y0: isize, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
         let min_x = x0.min(x1).min(x2);
         let max_x = x0.max(x1).max(x2);
         let min_y = y0.min(y1).min(y2);
@@ -174,30 +175,31 @@ impl Framebuffer {
         }
     }
 
-    pub fn draw_char(&mut self, x: isize, y: isize, c: char, color: u32) {
-        let idx = c as usize;
-        if idx >= 128 { return; }
-        let bitmap = fonts::FONT8X8_BASIC[idx];
-        for (row, bits) in bitmap.iter().enumerate() {
-            for col in 0..8 {
-                if (bits >> col) & 1 != 0 {
-                    self.put_pixel_safe(x + col as isize, y + row as isize, color);
-                }
-            }
-        }
-    }
+	pub fn draw_char(&mut self, x: isize, y: isize, c: char, color: u32) {
+	    let bitmap = self.font.get_char_bitmap(c).map(|slice| slice.to_vec());
+	    
+	    if let Some(bitmap) = bitmap {
+	        for (row, bits) in bitmap.iter().enumerate() {
+	            for col in 0..8 {
+	                if (bits >> (7 - col)) & 1 != 0 {
+	                    self.put_pixel_safe(x + col as isize, y + row as isize, color);
+	                }
+	            }
+	        }
+	    }
+	}
 
-    pub fn draw_string(&mut self, mut x: isize, mut y: isize, text: &str, color: u32) {
-        for c in text.chars() {
-            match c {
-                '\n' => { y += 8; x = 0; },
-                _ => {
-                    self.draw_char(x, y, c, color);
-                    x += 8;
-                }
-            }
-        }
-    }
+	pub fn draw_string(&mut self, mut x: isize, mut y: isize, text: &str, color: u32) {
+	    for c in text.chars() {
+	        match c {
+	            '\n' => { y += 16; x = 0; },
+	            _ => {
+	                self.draw_char(x, y, c, color);
+	                x += 8;
+	            }
+	        }
+	    }
+	}
 
 	pub fn draw_frame(&mut self) {
 	    unsafe {
@@ -208,7 +210,7 @@ impl Framebuffer {
 	}
 
 	pub fn fill_screen(&mut self, color: u32) {
-		self.fill_rect(0 as isize, 0 as isize, self.width as isize, self.height as isize, color);
+		self.fill_rect(0_isize, 0_isize, self.width as isize, self.height as isize, color);
 	}
 }
 
@@ -236,6 +238,25 @@ impl FramebufferWriter {
     pub fn set_color(&mut self, color: u32) {
         self.color = color;
     }
+
+    pub fn rm_char(&mut self) {
+   		if let Some(fb) = &mut self.fb {
+   			self.x -= 8;
+   			if self.x < 0 {
+   			    self.x = (fb.width - 8) as isize;
+   			    self.y -= 16;
+   			}
+   			fb.fill_rect(self.x, self.y, 8, 16, BLACK);
+   		}
+    }
+
+    pub fn clear(&mut self) {
+    	if let Some(fb) = &mut self.fb {
+			fb.fill_screen(BLACK);
+			self.x = 0;
+			self.y = 0;
+    	}
+    }
 }
 
 impl Write for FramebufferWriter {
@@ -244,7 +265,7 @@ impl Write for FramebufferWriter {
             for c in s.chars() {
                 match c {
                     '\n' => {
-                        self.y += 8;
+                        self.y += 16;
                         self.x = 0;
                     }
                     _ => {
@@ -252,7 +273,7 @@ impl Write for FramebufferWriter {
                         self.x += 8;
                         if self.x >= fb.width as isize {
                             self.x = 0;
-                            self.y += 8;
+                            self.y += 16;
                         }
                     }
                 }
@@ -345,6 +366,7 @@ pub unsafe fn init(multiboot_information_address: usize) -> &'static mut Framebu
 	    pitch: fb_tag.pitch() as usize,
 	    bpp: fb_tag.bpp() as usize,
 	    double_buf,
+	    font:fonts::Font::load_from_bytes(include_bytes!("../fonts/iso-8x16.font"), 16),
 	});
 
 	FRAMEBUFFER.as_mut().unwrap()

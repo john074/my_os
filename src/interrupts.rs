@@ -282,7 +282,7 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64)
 			ret = 0;		    
 		}
 		4 => { // SYS_RM_CHAR
-			vga_buffer::WRITER.lock().rm_char();
+			framebuffer::FB_WRITER.lock().rm_char();
 			ret = 0;
 		}
 		5 => { // SYS_SPAWN
@@ -421,6 +421,10 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64)
 				let data = fs.read_file(text).unwrap();
 				unsafe { multitasking::EXECUTOR_PTR.as_mut().unwrap().spawn(multitasking::Task::new(run_programm(data))) };
 			}
+			ret = 0;
+		}
+		18 => { // SYS_CLEAR
+			framebuffer::FB_WRITER.lock().clear();
 			ret = 0;
 		}	
 		_ => {
