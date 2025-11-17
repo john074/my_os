@@ -23,6 +23,7 @@ mod fs;
 mod framebuffer;
 mod mouse;
 mod fonts;
+mod gui;
 
 #[macro_use]
 extern crate bitflags;
@@ -66,13 +67,17 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	let mut fs = fat32::mount_fat32(boxed_ata).unwrap();
 	framebuffer.draw_frame();
 
-	framebuffer.fill_screen(framebuffer::BLACK);
+	framebuffer.fill_screen(framebuffer::MAGENTA);
+
+	let mut gui = gui::GuiSystem::new(framebuffer.width as isize, framebuffer. height as isize);
+	unsafe { gui::GUI_PTR = &mut gui as *mut gui::GuiSystem }
 	
 	unsafe {
 	    multitasking::EXECUTOR_PTR = Box::into_raw(executor);
 	    fat32::FS_PTR = &mut fs as *mut fat32::FAT32Volume;
 		(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(framebuffer::gui_loop()));
-	    (*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(start_shell()));
+		(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(draw_window()));
+	    //(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(start_shell()));
 	   	(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(keyboard::print_keypresses()));
 	    (*multitasking::EXECUTOR_PTR).run();
 	}
@@ -82,6 +87,11 @@ async fn start_shell() {
 	let fs = unsafe { &mut *fat32::FS_PTR };
 	let data = fs.read_file("/SOMNIA").unwrap();	
 	fat32::load_elf_and_jump(&data);
+}
+
+async fn draw_window() {
+	let gui = unsafe { &mut *gui::GUI_PTR };
+	gui.add_node(gui.root, gui::GuiElement::Window(gui::WindowData { title: "My Window" }), 50, 50, 200, 150);
 }
 
 pub fn hlt_loop() -> ! {

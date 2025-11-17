@@ -6,6 +6,7 @@ use lazy_static::lazy_static;
 use crate::mouse;
 use crate::multitasking;
 use crate::fonts;
+use crate::gui;
 
 lazy_static! {
     pub static ref FB_WRITER: Mutex<FramebufferWriter> = Mutex::new(FramebufferWriter::new());
@@ -13,8 +14,8 @@ lazy_static! {
 
 #[allow(static_mut_refs)]
 pub static mut FRAMEBUFFER: Option<Framebuffer> = None;
-
 static mut DOUBLE_BUF: [u8; 1024 * 768 * 4] = [0; 1024 * 768 * 4];
+pub const MAX_DIRTY: usize = 256;
 
 pub const BLACK:       u32 = 0xFF000000;
 pub const WHITE:       u32 = 0xFFFFFFFF;
@@ -36,10 +37,12 @@ pub struct Framebuffer {
     buf: *mut u8,
     pub width: usize,
     pub height: usize,
-    pitch: usize,
-    bpp: usize,
+    pub pitch: usize,
+    pub bpp: usize,
     double_buf: &'static mut [u8],
     font: fonts::Font,
+    dirty: [Option<DirtyRect>; MAX_DIRTY],
+    dirty_count: usize,
 }
 
 impl Framebuffer {
@@ -65,6 +68,14 @@ impl Framebuffer {
         let a = self.double_buf[offset + 3] as u32;
         (a << 24) | (r << 16) | (g << 8) | b
     }
+
+    pub fn draw_rect(&mut self, x: isize, y: isize, w: isize, h: isize, color: u32) {
+        self.draw_line(x, y, x + w - 1, y, color);
+        self.draw_line(x, y + h - 1, x + w - 1, y + h - 1, color);
+        self.draw_line(x, y, x, y + h - 1, color);
+        self.draw_line(x + w - 1, y, x + w - 1, y + h - 1, color);
+        self.mark_dirty(x, y, w, h);
+    }
     
     pub fn fill_rect(&mut self, x: isize, y: isize, w: isize, h: isize, color: u32) { 
 	    let xend = (x + w).min(self.width as isize);
@@ -74,6 +85,7 @@ impl Framebuffer {
 	            self.put_pixel_safe(xx, yy, color);
 	        }
 	    }
+	    self.mark_dirty(x, y, w, h);
     }
 
     pub fn draw_line(&mut self, mut x0: isize, mut y0: isize, x1: isize, y1: isize, color: u32) {
@@ -83,6 +95,11 @@ impl Framebuffer {
         let sy = if y0 < y1 { 1 } else { -1 };
         let mut err = dx + dy;
 
+		let min_x = x0.min(x1);
+		let max_x = x0.max(x1);
+		let min_y = y0.min(y1);
+		let max_y = y0.max(y1);
+		
         loop {
             if x0 >= 0 && y0 >= 0 {
                 self.put_pixel_safe(x0, y0, color);
@@ -98,6 +115,8 @@ impl Framebuffer {
                 y0 += sy;
             }
         }
+        
+        self.mark_dirty(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1);
     }
 
     pub fn put_pixel_safe(&mut self, x: isize, y: isize, color: u32) {
@@ -135,6 +154,7 @@ impl Framebuffer {
             }
             x += 1;
         }
+        self.mark_dirty(cx - r, cy - r, 2*r + 1, 2*r + 1);
     }
 
     pub fn fill_circle(&mut self, cx: isize, cy: isize, r: isize, color: u32) {
@@ -145,12 +165,20 @@ impl Framebuffer {
                 }
             }
         }
+        self.mark_dirty(cx - r, cy - r, 2*r + 1, 2*r + 1);
     }
 
     pub fn draw_triangle(&mut self, x0: isize, y0: isize, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
         self.draw_line(x0, y0, x1, y1, color);
         self.draw_line(x1, y1, x2, y2, color);
         self.draw_line(x2, y2, x0, y0, color);
+
+        let min_x = x0.min(x1).min(x2);
+	    let max_x = x0.max(x1).max(x2);
+	    let min_y = y0.min(y1).min(y2);
+	    let max_y = y0.max(y1).max(y2);
+
+	    self.mark_dirty(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1);
     }
 
     pub fn fill_triangle(&mut self, x0: isize, y0: isize, x1: isize, y1: isize, x2: isize, y2: isize, color: u32) {
@@ -173,6 +201,7 @@ impl Framebuffer {
                 }
             }
         }
+        self.mark_dirty(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1);
     }
 
 	pub fn draw_char(&mut self, x: isize, y: isize, c: char, color: u32) {
@@ -187,6 +216,7 @@ impl Framebuffer {
 	            }
 	        }
 	    }
+	    self.mark_dirty(x, y, 8, 16_isize);
 	}
 
 	pub fn draw_string(&mut self, mut x: isize, mut y: isize, text: &str, color: u32) {
@@ -203,14 +233,37 @@ impl Framebuffer {
 
 	pub fn draw_frame(&mut self) {
 	    unsafe {
-	        let src = self.double_buf.as_ptr();
-	        let dst = self.buf;
-	        core::ptr::copy_nonoverlapping(src, dst, self.pitch * self.height);
+	        for i in 0..self.dirty_count {
+	            if let Some(rect) = &self.dirty[i] {
+	                let src = self.double_buf.as_ptr().add((rect.y * self.pitch as isize + rect.x * 4) as usize);
+	                let dst = self.buf.add((rect.y * self.pitch as isize + rect.x * 4) as usize);
+
+	                for row in 0..rect.h {
+	                    core::ptr::copy_nonoverlapping(
+	                        src.add((row * self.pitch as isize) as usize),
+	                        dst.add((row * self.pitch as isize) as usize),
+	                        rect.w as usize * 4,
+	                    );
+	                }
+	            }
+	        }
 	    }
+
+	    self.dirty_count = 0;
 	}
+
 
 	pub fn fill_screen(&mut self, color: u32) {
 		self.fill_rect(0_isize, 0_isize, self.width as isize, self.height as isize, color);
+	}
+
+	#[inline]
+	pub fn mark_dirty(&mut self, x: isize, y: isize, w: isize, h: isize) {
+	    if self.dirty_count >= MAX_DIRTY { return; }
+	    if w <= 0 || h <= 0 { return; }
+
+	    self.dirty[self.dirty_count] = Some(DirtyRect { x, y, w, h });
+	    self.dirty_count += 1;
 	}
 }
 
@@ -286,6 +339,13 @@ impl Write for FramebufferWriter {
 unsafe impl Send for FramebufferWriter {}
 unsafe impl Sync for FramebufferWriter {}
 
+#[derive(Copy, Clone)]
+pub struct DirtyRect {
+    pub x: isize,
+    pub y: isize,
+    pub w: isize,
+    pub h: isize,
+}
 
 #[macro_export]
 macro_rules! print {
@@ -328,48 +388,29 @@ pub fn test_colors() {
     framebuffer.draw_frame();
 }
 
-pub fn draw_house(framebuffer: &mut Framebuffer) {
-	framebuffer.fill_screen(CYAN);
-	framebuffer.fill_rect(0, (framebuffer.height - 30) as isize, framebuffer.width as isize, 30, GREEN);
-	framebuffer.fill_rect(300, (framebuffer.height - 379) as isize, 350, 350, BROWN);
-	framebuffer.fill_triangle(280, (framebuffer.height - 379) as isize, 670, (framebuffer.height - 379) as isize, 475, 200, GRAY);
-	framebuffer.fill_circle(475, 325, 35, BLACK);
-	framebuffer.fill_rect(400, (framebuffer.height - 279) as isize, 150, 150, DARK_GRAY);
-	framebuffer.fill_rect(416, (framebuffer.height - 263) as isize, 51, 51, BLUE);
-	framebuffer.fill_rect(483, (framebuffer.height - 263) as isize, 51, 51, BLUE);
-	framebuffer.fill_rect(416, (framebuffer.height - 196) as isize, 51, 51, BLUE);
-	framebuffer.fill_rect(483, (framebuffer.height - 196) as isize, 51, 51, BLUE);
-	framebuffer.fill_circle(50, 50, 100, YELLOW);
-	framebuffer.draw_line(155, 20, 200, 20, YELLOW);
-	framebuffer.draw_line(155, 40, 200, 65, YELLOW);
-	framebuffer.draw_line(155, 60, 200, 85, YELLOW);
-	framebuffer.draw_line(90, 145, 115, 190, YELLOW);
-	framebuffer.draw_line(70, 150, 95, 195, YELLOW);
-	framebuffer.draw_line(50, 155, 50, 200, YELLOW);
-	framebuffer.draw_frame();
-}
-
 #[allow(static_mut_refs)]
 pub unsafe fn init(multiboot_information_address: usize) -> &'static mut Framebuffer {
 	let boot_info = unsafe{ BootInformation::load(multiboot_information_address as *const BootInformationHeader).unwrap() };
 	let fb_tag = boot_info.framebuffer_tag().expect("Framebuffer tag missing").unwrap();
 	let buf_size = fb_tag.height() as usize * fb_tag.pitch() as usize;
 
-	let double_buf = unsafe {
-	    &mut DOUBLE_BUF[..buf_size.min(DOUBLE_BUF.len())]
-	};
+	unsafe {
+	    let double_buf = &mut DOUBLE_BUF[..buf_size.min(DOUBLE_BUF.len())];
 
-	FRAMEBUFFER = Some(Framebuffer {
-	    buf: fb_tag.address() as *mut u8,
-	    width: fb_tag.width() as usize,
-	    height: fb_tag.height() as usize,
-	    pitch: fb_tag.pitch() as usize,
-	    bpp: fb_tag.bpp() as usize,
-	    double_buf,
-	    font:fonts::Font::load_from_bytes(include_bytes!("../fonts/iso-8x16.font"), 16),
-	});
+		FRAMEBUFFER = Some(Framebuffer {
+		    buf: fb_tag.address() as *mut u8,
+		    width: fb_tag.width() as usize,
+		    height: fb_tag.height() as usize,
+		    pitch: fb_tag.pitch() as usize,
+		    bpp: fb_tag.bpp() as usize,
+		    double_buf,
+		    font: fonts::Font::load_from_bytes(include_bytes!("../fonts/iso-8x16.font"), 16),
+		    dirty: [None; MAX_DIRTY],
+		    dirty_count: 0,
+		});
 
-	FRAMEBUFFER.as_mut().unwrap()
+		FRAMEBUFFER.as_mut().unwrap()
+	}
 }
 
 #[allow(static_mut_refs)]
@@ -384,6 +425,7 @@ pub async fn gui_loop() {
 				mouse.y = mouse::MOUSE_Y;
 				mouse.draw(fb);
 			}
+			(*gui::GUI_PTR).draw(fb);
 			fb.draw_frame();
 			multitasking::cooperate().await;
 		}

@@ -117,6 +117,8 @@ impl Mouse {
     }
 
     pub fn erase(&mut self, fb: &mut framebuffer::Framebuffer) {
+	    fb.mark_dirty(self.prev_x, self.prev_y, self.width as isize, self.height as isize);
+	    
         for yy in 0..self.height {
             for xx in 0..self.width {
                 let color = self.saved_bg[yy * self.width + xx];
@@ -126,6 +128,7 @@ impl Mouse {
     }
 
     pub fn draw(&mut self, fb: &mut framebuffer::Framebuffer) {
+    	fb.mark_dirty(self.x, self.y, self.width as isize, self.height as isize);
         // save bg
         for yy in 0..self.height {
             for xx in 0..self.width {

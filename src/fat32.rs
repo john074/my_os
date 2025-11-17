@@ -12,7 +12,6 @@ use alloc::boxed::Box;
 use crate::multitasking;
 use crate::println;
 
-
 pub static mut FS_PTR: *mut FAT32Volume = core::ptr::null_mut();
 pub static mut RETURN_ADDR: usize = 0;
 
