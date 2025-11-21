@@ -69,7 +69,7 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 
 	framebuffer.fill_screen(framebuffer::MAGENTA);
 
-	let mut gui = gui::GuiSystem::new(framebuffer.width as isize, framebuffer. height as isize);
+	let mut gui = gui::GuiSystem::new(framebuffer.width as isize, framebuffer.height as isize);
 	unsafe { gui::GUI_PTR = &mut gui as *mut gui::GuiSystem }
 	
 	unsafe {
@@ -91,7 +91,7 @@ async fn start_shell() {
 
 async fn draw_window() {
 	let gui = unsafe { &mut *gui::GUI_PTR };
-	gui.add_node(gui.root, gui::GuiElement::Window(gui::WindowData { title: "My Window" }), 50, 50, 200, 150);
+	gui.create_window("My window", 50, 50, 200, 150);
 }
 
 pub fn hlt_loop() -> ! {

@@ -128,6 +128,11 @@ pub extern "x86-interrupt" fn mouse_handler(_stack_frame: InterruptStackFrame) {
             let packet = MOUSE_PACKET;
             MOUSE_PHASE = 0;
 
+            let b = packet[0] & 0x07;
+            if !mouse::MOUSE_PTR.is_null() {
+            	(*mouse::MOUSE_PTR).buttons = b;
+            }
+
             let dx = packet[1] as i8 as isize;
             let dy = -(packet[2] as i8 as isize);
 

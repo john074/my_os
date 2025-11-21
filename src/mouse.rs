@@ -101,6 +101,10 @@ pub struct Mouse {
     pub width: usize,
     pub height: usize,
     pub saved_bg: [u32; 16*16],
+
+    // buttons bits: bit0 = left, bit1 = right, bit2 = middle
+    pub buttons: u8,
+    pub prev_buttons: u8,
 }
 
 impl Mouse {
@@ -113,6 +117,8 @@ impl Mouse {
             width: 16,
             height: 16,
             saved_bg: [0; 16*16],
+            buttons: 0,
+            prev_buttons: 0,
         }
     }
 

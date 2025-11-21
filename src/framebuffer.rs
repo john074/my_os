@@ -419,13 +419,33 @@ pub async fn gui_loop() {
 		let fb = FRAMEBUFFER.as_mut().unwrap();
 		let mouse = &mut *mouse::MOUSE_PTR;
 		loop {
+			mouse.erase(fb);
 			if mouse.x != mouse::MOUSE_X || mouse.y != mouse::MOUSE_Y {
-				mouse.erase(fb);
 				mouse.x = mouse::MOUSE_X;
 				mouse.y = mouse::MOUSE_Y;
-				mouse.draw(fb);
 			}
+
+			if mouse.buttons != mouse.prev_buttons {
+			    // left button changes
+			    let prev = mouse.prev_buttons;
+			    let curr = mouse.buttons;
+			    // bit0 = left
+			    let prev_left = (prev & 0x1) != 0;
+			    let curr_left = (curr & 0x1) != 0;
+
+			    if !prev_left && curr_left {
+			        // left button pressed
+			        gui::handle_mouse_down(mouse.x, mouse.y);
+			    } else if prev_left && !curr_left {
+			        // left button released
+			        gui::handle_mouse_up(mouse.x, mouse.y);
+			    }
+
+			    mouse.prev_buttons = mouse.buttons;
+			}
+			
 			(*gui::GUI_PTR).draw(fb);
+			mouse.draw(fb);
 			fb.draw_frame();
 			multitasking::cooperate().await;
 		}
