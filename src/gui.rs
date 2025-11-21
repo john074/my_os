@@ -1,5 +1,8 @@
 use alloc::vec::Vec;
 use crate::framebuffer;
+use crate::multitasking;
+use crate::mouse;
+use crate::println;
 
 pub static mut GUI_PTR: *mut GuiSystem = core::ptr::null_mut();
 
@@ -28,6 +31,7 @@ pub struct GuiSystem {
     pub nodes: Vec<GuiNode>,
     pub root: NodeId, // desktop
     pub free_list: Vec<NodeId>,
+   	pub dragging: Option<(NodeId, isize, isize)>,
 }
 
 impl GuiSystem {
@@ -47,6 +51,7 @@ impl GuiSystem {
             nodes: vec![root],
             root: 0,
             free_list: Vec::new(),
+            dragging: None,
         }
     }
 
@@ -96,25 +101,25 @@ impl GuiSystem {
 
 	}
 
-    pub fn create_window(&mut self, title: &'static str, x: isize, y: isize, w: isize, h: isize) -> NodeId {
-         let win_id = self.add_node(self.root, GuiElement::Window(WindowData { title }), x, y, w, h);
+	pub fn create_window(&mut self, title: &'static str, x: isize, y: isize, w: isize, h: isize) -> NodeId {
+    	let win_id = self.add_node(self.root, GuiElement::Window(WindowData { title }), x, y, w, h);
 
-         let bw = 20;
-         let bh = 18;
+        let bw = 20;
+        let bh = 18;
 
-         let close_x = w - bw - 4;
-         let max_x = close_x - bw - 2;
-         let min_x = max_x - bw - 2;
-         let by = 3;
+        let close_x = w - bw - 4;
+        let max_x = close_x - bw - 2;
+        let min_x = max_x - bw - 2;
+        let by = 3;
 
-         self.add_node(win_id, GuiElement::Button(ButtonData::new("-", Some(button_minimize))), min_x, by, bw, bh);
-         self.add_node(win_id, GuiElement::Button(ButtonData::new("+", Some(button_maximize))), max_x, by, bw, bh);
-         self.add_node(win_id, GuiElement::Button(ButtonData::new("X", Some(button_close))), close_x, by, bw, bh);
+        self.add_node(win_id, GuiElement::Button(ButtonData::new("-", Some(button_minimize))), min_x, by, bw, bh);
+        self.add_node(win_id, GuiElement::Button(ButtonData::new("+", Some(button_maximize))), max_x, by, bw, bh);
+        self.add_node(win_id, GuiElement::Button(ButtonData::new("X", Some(button_close))), close_x, by, bw, bh);
 
-         win_id
-     }
+        win_id
+	}
 
-     pub fn hit_test(&self, id: NodeId, x: isize, y: isize) -> Option<NodeId> {
+    pub fn hit_test(&self, id: NodeId, x: isize, y: isize) -> Option<NodeId> {
          let node = &self.nodes[id];
 
          if x < node.x || y < node.y || x >= node.x + node.width || y >= node.y + node.height {
@@ -131,7 +136,7 @@ impl GuiSystem {
          }
 
          Some(id)
-     }
+	}
 
 	pub fn mark_dirty(&mut self, id: NodeId) {
 	    let children = self.nodes[id].children.clone();
@@ -268,6 +273,16 @@ pub fn handle_mouse_down(x: isize, y: isize) {
             	btn.state = ButtonState::Pressed;
                 gui.nodes[id].dirty = true;
             }
+            GuiElement::Window(_) => {
+            	// unsafe {
+            	// 	(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(move_window(id)));
+            	// }
+            	let mouse = unsafe { &mut *mouse::MOUSE_PTR };
+            	let window = &mut gui.nodes[id];
+            	let dx = mouse.x - window.x;
+            	let dy = mouse.y - window.y;	
+            	gui.dragging = Some((id, dx, dy));
+            }
             _ => {}
         }
     }
@@ -288,3 +303,20 @@ pub fn handle_mouse_up(x: isize, y: isize) {
         }
     }
 }
+
+// #[allow(static_mut_refs)]
+// pub async fn move_window(id: NodeId) {
+// 	let mouse = unsafe { &mut *mouse::MOUSE_PTR };
+// 	let gui = unsafe { &mut *GUI_PTR };
+// 	let window = &mut gui.nodes[id];
+// 	let dx = mouse.x - window.x;
+// 	let dy = mouse.y - window.y;
+// 	while mouse.l_pressed {
+// 		unsafe { framebuffer::FRAMEBUFFER.as_mut().unwrap().fill_rect(window.x, window.y, window.width, window.height, framebuffer::MAGENTA) };
+// 		window.x = mouse.x - dx;
+// 		window.y = mouse.y - dy;
+// 		window.dirty = true;
+// 		unsafe { (*GUI_PTR).mark_dirty(id) };
+// 		multitasking::cooperate().await
+// 	}
+// }

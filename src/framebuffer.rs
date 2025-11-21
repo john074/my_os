@@ -7,6 +7,7 @@ use crate::mouse;
 use crate::multitasking;
 use crate::fonts;
 use crate::gui;
+use crate::framebuffer;
 
 lazy_static! {
     pub static ref FB_WRITER: Mutex<FramebufferWriter> = Mutex::new(FramebufferWriter::new());
@@ -418,6 +419,7 @@ pub async fn gui_loop() {
 	unsafe {
 		let fb = FRAMEBUFFER.as_mut().unwrap();
 		let mouse = &mut *mouse::MOUSE_PTR;
+		let gui = &mut *gui::GUI_PTR;
 		loop {
 			mouse.erase(fb);
 			if mouse.x != mouse::MOUSE_X || mouse.y != mouse::MOUSE_Y {
@@ -435,16 +437,31 @@ pub async fn gui_loop() {
 
 			    if !prev_left && curr_left {
 			        // left button pressed
+			        mouse.l_pressed = true;
 			        gui::handle_mouse_down(mouse.x, mouse.y);
 			    } else if prev_left && !curr_left {
 			        // left button released
+			        mouse.l_pressed = false;
 			        gui::handle_mouse_up(mouse.x, mouse.y);
 			    }
 
 			    mouse.prev_buttons = mouse.buttons;
 			}
+
+			if let Some((id, dx, dy)) = gui.dragging {
+			    if mouse.l_pressed {
+			        let window = &mut gui.nodes[id];
+			        framebuffer::FRAMEBUFFER.as_mut().unwrap().fill_rect(window.x, window.y, window.width, window.height, framebuffer::MAGENTA);
+			        window.x = mouse.x - dx;
+			        window.y = mouse.y - dy;
+			        window.dirty = true;
+			        gui.mark_dirty(id);
+			    } else {
+			        gui.dragging = None;
+			    }
+			}
 			
-			(*gui::GUI_PTR).draw(fb);
+			gui.draw(fb);
 			mouse.draw(fb);
 			fb.draw_frame();
 			multitasking::cooperate().await;

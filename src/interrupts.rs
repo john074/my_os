@@ -137,7 +137,7 @@ pub extern "x86-interrupt" fn mouse_handler(_stack_frame: InterruptStackFrame) {
             let dy = -(packet[2] as i8 as isize);
 
             mouse::MOUSE_X = (mouse::MOUSE_X + dx).clamp(0, 1023);
-            mouse::MOUSE_Y = (mouse::MOUSE_Y + dy).clamp(0, 767);
+            mouse::MOUSE_Y = (mouse::MOUSE_Y + dy).clamp(0, 752);
         }
 
         PICS.lock().notify_end_of_interrupt(InterruptIndex::Mouse.as_u8());

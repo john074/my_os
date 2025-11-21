@@ -8,22 +8,21 @@
 use core::panic::PanicInfo;
 use alloc::boxed::Box; 
 
-mod vga_buffer;
-mod interrupts;
-mod gdt;
-mod carriage;
-mod memory;
-mod cpu;
-mod time;
-mod std;
-mod multitasking;
-mod keyboard;
-mod fat32;
-mod fs;
-mod framebuffer;
-mod mouse;
-mod fonts;
-mod gui;
+pub mod vga_buffer;
+pub mod interrupts;
+pub mod gdt;
+pub mod carriage;
+pub mod memory;
+pub mod cpu;
+pub mod time;
+pub mod std;
+pub mod multitasking;
+pub mod keyboard;
+pub mod fat32;
+pub mod framebuffer;
+pub mod mouse;
+pub mod fonts;
+pub mod gui;
 
 #[macro_use]
 extern crate bitflags;
@@ -40,7 +39,7 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	let framebuffer = unsafe { framebuffer::FRAMEBUFFER.as_mut().unwrap() };
 	framebuffer::test_colors();
 
-	time::sleep(3000);
+	//time::sleep(3000);
 	
 	framebuffer.fill_screen(framebuffer::BLACK);
 	framebuffer.draw_frame();
@@ -92,6 +91,7 @@ async fn start_shell() {
 async fn draw_window() {
 	let gui = unsafe { &mut *gui::GUI_PTR };
 	gui.create_window("My window", 50, 50, 200, 150);
+	gui.create_window("My window2", 450, 50, 200, 150);
 }
 
 pub fn hlt_loop() -> ! {

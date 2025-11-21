@@ -105,6 +105,7 @@ pub struct Mouse {
     // buttons bits: bit0 = left, bit1 = right, bit2 = middle
     pub buttons: u8,
     pub prev_buttons: u8,
+    pub l_pressed: bool,
 }
 
 impl Mouse {
@@ -119,6 +120,7 @@ impl Mouse {
             saved_bg: [0; 16*16],
             buttons: 0,
             prev_buttons: 0,
+            l_pressed: false,
         }
     }
 
@@ -142,8 +144,8 @@ impl Mouse {
                     fb.get_pixel(self.x + xx as isize, self.y + yy as isize);
             }
         }
-
-        fb.fill_triangle(
+        
+       	fb.fill_triangle(
             self.x, self.y,
             self.x, self.y + 10,
             self.x + 10, self.y + 5,
