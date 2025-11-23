@@ -8,21 +8,21 @@
 use core::panic::PanicInfo;
 use alloc::boxed::Box; 
 
-pub mod vga_buffer;
-pub mod interrupts;
-pub mod gdt;
-pub mod carriage;
-pub mod memory;
-pub mod cpu;
-pub mod time;
-pub mod std;
-pub mod multitasking;
-pub mod keyboard;
-pub mod fat32;
-pub mod framebuffer;
-pub mod mouse;
-pub mod fonts;
-pub mod gui;
+mod vga_buffer;
+mod interrupts;
+mod gdt;
+mod carriage;
+mod memory;
+mod cpu;
+mod time;
+mod std;
+mod multitasking;
+mod keyboard;
+mod fat32;
+mod framebuffer;
+mod mouse;
+mod fonts;
+mod gui;
 
 #[macro_use]
 extern crate bitflags;
@@ -66,7 +66,7 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	let mut fs = fat32::mount_fat32(boxed_ata).unwrap();
 	framebuffer.draw_frame();
 
-	framebuffer.fill_screen(framebuffer::MAGENTA);
+	framebuffer::draw_background();
 
 	let mut gui = gui::GuiSystem::new(framebuffer.width as isize, framebuffer.height as isize);
 	unsafe { gui::GUI_PTR = &mut gui as *mut gui::GuiSystem }

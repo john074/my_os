@@ -7,7 +7,6 @@ use crate::mouse;
 use crate::multitasking;
 use crate::fonts;
 use crate::gui;
-use crate::framebuffer;
 
 lazy_static! {
     pub static ref FB_WRITER: Mutex<FramebufferWriter> = Mutex::new(FramebufferWriter::new());
@@ -16,6 +15,7 @@ lazy_static! {
 #[allow(static_mut_refs)]
 pub static mut FRAMEBUFFER: Option<Framebuffer> = None;
 static mut DOUBLE_BUF: [u8; 1024 * 768 * 4] = [0; 1024 * 768 * 4];
+static mut WALLPAPER_BUF: [u8; 1024 * 768 * 4] = [0; 1024 * 768 * 4];
 pub const MAX_DIRTY: usize = 256;
 
 pub const BLACK:       u32 = 0xFF000000;
@@ -41,6 +41,7 @@ pub struct Framebuffer {
     pub pitch: usize,
     pub bpp: usize,
     double_buf: &'static mut [u8],
+    wallpaper_buf: &'static mut [u8],
     font: fonts::Font,
     dirty: [Option<DirtyRect>; MAX_DIRTY],
     dirty_count: usize,
@@ -253,7 +254,6 @@ impl Framebuffer {
 	    self.dirty_count = 0;
 	}
 
-
 	pub fn fill_screen(&mut self, color: u32) {
 		self.fill_rect(0_isize, 0_isize, self.width as isize, self.height as isize, color);
 	}
@@ -266,6 +266,39 @@ impl Framebuffer {
 	    self.dirty[self.dirty_count] = Some(DirtyRect { x, y, w, h });
 	    self.dirty_count += 1;
 	}
+
+	pub fn blit_rect_from_wallpaper(&mut self, x: isize, y: isize, w: usize, h: usize) {
+	        if x < 0 || y < 0 { return; }
+	
+	        let x = x as usize;
+	        let y = y as usize;
+	
+	        if x >= self.width || y >= self.height { return; }
+	
+	        let max_w = self.width - x;
+	        let max_h = self.height - y;
+	
+	        let w = w.min(max_w);
+	        let h = h.min(max_h);
+	
+	        let bytes_per_pixel = self.bpp / 8;
+	        let row_bytes = w * bytes_per_pixel;
+	
+	        for row in 0..h {
+	            let src_offset = (y + row) * self.pitch + x * bytes_per_pixel;
+	            let dst_offset = src_offset;
+	
+	            unsafe {
+	                core::ptr::copy_nonoverlapping(
+	                    self.wallpaper_buf.as_ptr().add(src_offset),
+	                    self.double_buf.as_mut_ptr().add(dst_offset),
+	                    row_bytes
+	                );
+	            }
+	        }
+	
+	        self.mark_dirty(x as isize, y as isize, w as isize, h as isize);
+	    }
 }
 
 pub struct FramebufferWriter {
@@ -390,6 +423,52 @@ pub fn test_colors() {
 }
 
 #[allow(static_mut_refs)]
+pub fn draw_background() {
+	let fb = unsafe{ FRAMEBUFFER.as_mut().unwrap() };
+	fb.fill_screen(MAGENTA);
+	
+	fb.fill_rect(224, 150, 80, 20, WHITE);
+	fb.fill_rect(224, 170, 20, 50, WHITE);
+	fb.fill_rect(244, 200, 60, 20, WHITE);
+	fb.fill_rect(284, 220, 20, 50, WHITE);
+	fb.fill_rect(224, 250, 60, 20, WHITE);
+
+	fb.fill_rect(324, 150, 80, 120, WHITE);
+	fb.fill_rect(344, 170, 40, 80, MAGENTA);
+
+	fb.fill_rect(424, 150, 80, 120, WHITE);
+	fb.fill_triangle(444, 149, 484, 149, 464, 230, MAGENTA);
+	fb.fill_triangle(444, 210, 444, 270, 464, 270, MAGENTA);
+	fb.fill_triangle(484, 210, 484, 270, 464, 270, MAGENTA);
+
+	fb.fill_rect(524, 150, 80, 120, WHITE);
+	fb.fill_triangle(544, 149, 584, 149, 584, 210, MAGENTA);
+	fb.fill_triangle(544, 210, 544, 270, 584, 270, MAGENTA);
+
+	fb.fill_rect(624, 150, 20, 120, WHITE);
+
+	fb.fill_rect(664, 170, 20, 100, WHITE);
+	fb.fill_rect(684, 150, 40, 20, WHITE);
+	fb.fill_rect(724, 170, 20, 100, WHITE);
+	fb.fill_rect(684, 210, 40, 20, WHITE);
+
+	fb.fill_rect(394, 310, 80, 120, WHITE);
+	fb.fill_rect(414, 330, 40, 80, MAGENTA);
+
+	fb.fill_rect(494, 310, 80, 20, WHITE);
+	fb.fill_rect(494, 330, 20, 50, WHITE);
+	fb.fill_rect(514, 360, 60, 20, WHITE);
+	fb.fill_rect(554, 380, 20, 50, WHITE);
+	fb.fill_rect(494, 410, 60, 20, WHITE);
+
+	unsafe {
+	    let src = fb.double_buf.as_ptr();
+	    let dst = fb.wallpaper_buf.as_mut_ptr();
+	    core::ptr::copy_nonoverlapping(src, dst, fb.pitch * fb.height);
+	}
+}
+
+#[allow(static_mut_refs)]
 pub unsafe fn init(multiboot_information_address: usize) -> &'static mut Framebuffer {
 	let boot_info = unsafe{ BootInformation::load(multiboot_information_address as *const BootInformationHeader).unwrap() };
 	let fb_tag = boot_info.framebuffer_tag().expect("Framebuffer tag missing").unwrap();
@@ -397,6 +476,7 @@ pub unsafe fn init(multiboot_information_address: usize) -> &'static mut Framebu
 
 	unsafe {
 	    let double_buf = &mut DOUBLE_BUF[..buf_size.min(DOUBLE_BUF.len())];
+	    let wp_buf = &mut WALLPAPER_BUF[..buf_size.min(WALLPAPER_BUF.len())];
 
 		FRAMEBUFFER = Some(Framebuffer {
 		    buf: fb_tag.address() as *mut u8,
@@ -405,6 +485,7 @@ pub unsafe fn init(multiboot_information_address: usize) -> &'static mut Framebu
 		    pitch: fb_tag.pitch() as usize,
 		    bpp: fb_tag.bpp() as usize,
 		    double_buf,
+		    wallpaper_buf: wp_buf,
 		    font: fonts::Font::load_from_bytes(include_bytes!("../fonts/iso-8x16.font"), 16),
 		    dirty: [None; MAX_DIRTY],
 		    dirty_count: 0,
@@ -451,14 +532,30 @@ pub async fn gui_loop() {
 			if let Some((id, dx, dy)) = gui.dragging {
 			    if mouse.l_pressed {
 			        let window = &mut gui.nodes[id];
-			        framebuffer::FRAMEBUFFER.as_mut().unwrap().fill_rect(window.x, window.y, window.width, window.height, framebuffer::MAGENTA);
+			        fb.blit_rect_from_wallpaper(window.x, window.y, window.width as usize, window.height as usize);
 			        window.x = mouse.x - dx;
 			        window.y = mouse.y - dy;
+			        (*gui::GUI_PTR).mark_overlapping_windows_dirty(id);
 			        window.dirty = true;
 			        gui.mark_dirty(id);
 			    } else {
 			        gui.dragging = None;
 			    }
+			}
+
+			if let Some(id) = gui.resizing {
+				if mouse.l_pressed {
+						if mouse.x != mouse.prev_x || mouse.y != mouse.prev_y {
+						let window = &mut gui.nodes[id];
+						let dx = mouse.x - (window.x + window.width);
+						let dy = mouse.y - (window.y + window.height);
+						gui::resize_window(id, dx, dy);
+						gui.mark_overlapping_windows_dirty(id);
+					}
+				}
+				else {
+					gui.resizing = None;
+				}
 			}
 			
 			gui.draw(fb);

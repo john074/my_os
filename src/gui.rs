@@ -1,10 +1,10 @@
 use alloc::vec::Vec;
 use crate::framebuffer;
-use crate::multitasking;
 use crate::mouse;
-use crate::println;
 
 pub static mut GUI_PTR: *mut GuiSystem = core::ptr::null_mut();
+
+// GUI ELEMENTS
 
 pub enum GuiElement {
 	Desktop(DesktopData),
@@ -26,12 +26,12 @@ pub struct GuiNode {
     pub dirty: bool,
 }
 
-
 pub struct GuiSystem {
     pub nodes: Vec<GuiNode>,
     pub root: NodeId, // desktop
     pub free_list: Vec<NodeId>,
    	pub dragging: Option<(NodeId, isize, isize)>,
+   	pub resizing: Option<NodeId>,
 }
 
 impl GuiSystem {
@@ -52,6 +52,7 @@ impl GuiSystem {
             root: 0,
             free_list: Vec::new(),
             dragging: None,
+            resizing: None,
         }
     }
 
@@ -73,6 +74,7 @@ impl GuiSystem {
     }
 
 	fn draw_node(&mut self, id: NodeId, ox: isize, oy: isize, fb: &mut framebuffer::Framebuffer) {
+		self.adjust_safe_placement(id);
 	    let (ax, ay, children, dirty, element) = {
 	        let node = &self.nodes[id];
 	        (
@@ -102,7 +104,12 @@ impl GuiSystem {
 	}
 
 	pub fn create_window(&mut self, title: &'static str, x: isize, y: isize, w: isize, h: isize) -> NodeId {
-    	let win_id = self.add_node(self.root, GuiElement::Window(WindowData { title }), x, y, w, h);
+    	let win_id = self.add_node(self.root, GuiElement::Window(WindowData {
+    	 title,
+    	 minimized_x: x,
+    	 minimized_y: y,
+    	 minimized_width: w, 
+    	 minimized_height: h }), x, y, w, h);
 
         let bw = 20;
         let bh = 18;
@@ -171,46 +178,68 @@ impl GuiSystem {
 	
 	    let win = &self.nodes[window_id];
 	    unsafe {
-	        framebuffer::FRAMEBUFFER.as_mut().unwrap().fill_rect(win.x, win.y, win.width, win.height, framebuffer::MAGENTA);
+	        framebuffer::FRAMEBUFFER.as_mut().unwrap().blit_rect_from_wallpaper(win.x, win.y, win.width as usize, win.height as usize);
+	    }
+	}
+
+	pub fn adjust_safe_placement(&mut self, id: NodeId) {
+		let window = &mut self.nodes[id];
+	
+		if let GuiElement::Window(_) = window.element {
+			if window.x < 0 { window.x = 0; }
+			if window.y < 0 { window.y = 0; }
+			if window.x > 933 { window.x = 934; }
+			if window.y > 743 { window.y = 743; }
+			if window.width > 1024 { window.width = 1024; }
+			if window.height > 768 { window.height = 768; }
+			if window.x + window.width > 1023 { window.x = 1024 - window.width; }
+			if window.y + window.height > 767 { window.y = 768 - window.height; }
+		}
+	}
+
+	pub fn bring_to_front(&mut self, id: NodeId) {
+	    let parent = self.nodes[id].parent.unwrap();
+	    let children = &mut self.nodes[parent].children;
+
+	    if let Some(pos) = children.iter().position(|&c| c == id) {
+	        let item = children.remove(pos);
+	        children.push(item);
+	    }
+
+	    self.nodes[id].dirty = true;
+	}
+
+	pub fn mark_overlapping_windows_dirty(&mut self, win_id: NodeId) {
+	    let (x, y, w, h) = {
+	        let w = &self.nodes[win_id];
+	        (w.x, w.y, w.width, w.height)
+	    };
+
+	    let siblings = self.nodes[self.root].children.clone();
+
+	    for &other in &siblings {
+	        if other == win_id { continue; }
+	        let n = &self.nodes[other];
+
+	        if rect_intersects(x,y,w,h, n.x,n.y,n.width,n.height) {
+	            self.nodes[other].dirty = true;
+	            self.mark_dirty(other);
+	        }
 	    }
 	}
 }
 
-#[allow(static_mut_refs)]
-fn button_minimize(id: NodeId, gui: &mut GuiSystem) {
-    let parent_id = gui.nodes[id].parent.unwrap();
-    let window = &mut gui.nodes[parent_id];
-    unsafe { framebuffer::FRAMEBUFFER.as_mut().unwrap().fill_screen(framebuffer::MAGENTA) };
-    window.width = 200;
-    window.height = 150;
-    window.x = 50;
-    window.y = 50;
-    window.dirty = true;
-    gui.mark_dirty(parent_id);
-}
-
-fn button_maximize(id: NodeId, gui: &mut GuiSystem) {
-    let parent_id = gui.nodes[id].parent.unwrap();
-    let window = &mut gui.nodes[parent_id];
-    window.width = 1024;
-    window.height = 768;
-    window.x = 0;
-    window.y = 0;
-    window.dirty = true;
-    gui.mark_dirty(parent_id);
-}
-
-fn button_close(id: NodeId, gui: &mut GuiSystem) {
-    let parent_id = gui.nodes[id].parent.unwrap();
-    gui.close_window(parent_id);
-}
-
+// DATA STRUCTS
 
 pub struct DesktopData {
 }
 
 pub struct WindowData {
     pub title: &'static str,
+    pub minimized_x: isize,
+    pub minimized_y: isize,
+    pub minimized_width: isize,
+    pub minimized_height: isize,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -235,6 +264,122 @@ impl ButtonData {
         }
     }
 }
+
+// WINDOW HELP FUNCTIONS
+
+fn button_maximize(id: NodeId, gui: &mut GuiSystem) {
+	let parent_id = gui.nodes[id].parent.unwrap();
+	gui.bring_to_front(parent_id);
+	let window = &mut gui.nodes[parent_id];
+	
+	if let GuiElement::Window(window_data) = &mut window.element {
+		window_data.minimized_x = window.x;
+		window_data.minimized_y = window.y;
+		window_data.minimized_width = window.width;
+		window_data.minimized_height = window.height;
+	}
+
+	window.x = 0;
+	window.y = 0;
+	resize_window(parent_id, 1024 - window.width, 768 - window.height);
+
+	let siblings = gui.nodes[gui.root].children.clone();
+	for &other in &siblings {
+	    if other == id { continue; }
+	    gui.nodes[other].dirty = true;
+	    gui.mark_dirty(other);
+	}
+}
+
+fn button_minimize(id: NodeId, gui: &mut GuiSystem) {
+    let parent_id = gui.nodes[id].parent.unwrap();
+    gui.bring_to_front(parent_id);
+    let window = &mut gui.nodes[parent_id];
+    
+    if let GuiElement::Window(window_data) = &window.element {
+		resize_window(parent_id, window_data.minimized_width - window.width, window_data.minimized_height - window.height);
+		window.x = window_data.minimized_x;
+		window.y = window_data.minimized_y;
+    } 
+    
+    let siblings = gui.nodes[gui.root].children.clone();
+    for &other in &siblings {
+        if other == id { continue; }
+        gui.nodes[other].dirty = true;
+        gui.mark_dirty(other);
+    }  
+}
+
+fn button_close(id: NodeId, gui: &mut GuiSystem) {
+    let parent_id = gui.nodes[id].parent.unwrap();
+    gui.close_window(parent_id);
+}
+
+#[allow(static_mut_refs)]
+pub fn resize_window(id: NodeId, dx: isize, dy: isize) {
+	let gui = unsafe { &mut *GUI_PTR };
+
+	let window_width = {
+		let window = &mut gui.nodes[id];
+
+		if dx < 0 || dy < 0 {
+			unsafe {
+			    framebuffer::FRAMEBUFFER.as_mut().unwrap().blit_rect_from_wallpaper(window.x, window.y, window.width as usize, window.height as usize);
+			}
+		}
+		
+		if window.width + dx > 1024 {
+			window.width = 1024;
+		}
+		else if window.width + dx < 90 {
+			window.width = 90;
+		}
+		else {
+			window.width += dx;
+		}
+		
+		if window.height + dy > 768 {
+			window.height = 768;
+		}
+		else if window.height + dy < 24 {
+			window.height = 24;
+		}
+		else {
+			window.height += dy;
+		}
+
+		window.dirty = true;
+		window.width
+	};
+
+	let bw = 20;
+
+	let cls_x = {
+		let cls_btn = &mut gui.nodes[id + 3];
+		cls_btn.x = window_width - bw - 4;
+		cls_btn.x
+	};
+
+	let max_x = {
+		let max_btn = &mut gui.nodes[id + 2];
+		max_btn.x = cls_x - bw - 2;
+		max_btn.x
+	};
+
+	let min_btn = &mut gui.nodes[id + 1];
+    min_btn.x = max_x - bw - 2;
+
+    gui.mark_dirty(id);
+}
+
+fn rect_intersects(a_x: isize, a_y: isize, a_w: isize, a_h: isize, b_x: isize, b_y: isize, b_w: isize, b_h: isize) -> bool {
+    !(a_x + a_w <= b_x ||
+      b_x + b_w <= a_x ||
+      a_y + a_h <= b_y ||
+      b_y + b_h <= a_y)
+}
+
+// DRAWING
 
 const WIN95_BG: u32 = 0xC0C0C0;
 const WIN95_TITLE_BAR: u32 = 0x000080;
@@ -265,6 +410,8 @@ pub fn draw_button(x: isize, y: isize, w: isize, h:isize, b:&ButtonData, fb: &mu
     }
 }
 
+// MOUSE HADLING
+
 pub fn handle_mouse_down(x: isize, y: isize) {
 	let gui = unsafe { &mut *GUI_PTR };
     if let Some(id) = gui.hit_test(gui.root, x, y) {
@@ -274,14 +421,18 @@ pub fn handle_mouse_down(x: isize, y: isize) {
                 gui.nodes[id].dirty = true;
             }
             GuiElement::Window(_) => {
-            	// unsafe {
-            	// 	(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(move_window(id)));
-            	// }
+            	gui.bring_to_front(id);
             	let mouse = unsafe { &mut *mouse::MOUSE_PTR };
             	let window = &mut gui.nodes[id];
-            	let dx = mouse.x - window.x;
-            	let dy = mouse.y - window.y;	
-            	gui.dragging = Some((id, dx, dy));
+
+				if (window.x + window.width - mouse.x <= 10) || (window.y + window.height - mouse.y <= 10) {
+					gui.resizing = Some(id);
+				}
+            	else {
+	            	let dx = mouse.x - window.x;
+	            	let dy = mouse.y - window.y;	
+	            	gui.dragging = Some((id, dx, dy));
+	            }
             }
             _ => {}
         }
@@ -303,20 +454,3 @@ pub fn handle_mouse_up(x: isize, y: isize) {
         }
     }
 }
-
-// #[allow(static_mut_refs)]
-// pub async fn move_window(id: NodeId) {
-// 	let mouse = unsafe { &mut *mouse::MOUSE_PTR };
-// 	let gui = unsafe { &mut *GUI_PTR };
-// 	let window = &mut gui.nodes[id];
-// 	let dx = mouse.x - window.x;
-// 	let dy = mouse.y - window.y;
-// 	while mouse.l_pressed {
-// 		unsafe { framebuffer::FRAMEBUFFER.as_mut().unwrap().fill_rect(window.x, window.y, window.width, window.height, framebuffer::MAGENTA) };
-// 		window.x = mouse.x - dx;
-// 		window.y = mouse.y - dy;
-// 		window.dirty = true;
-// 		unsafe { (*GUI_PTR).mark_dirty(id) };
-// 		multitasking::cooperate().await
-// 	}
-// }
