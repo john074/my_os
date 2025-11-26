@@ -287,7 +287,21 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64)
 			ret = 0;		    
 		}
 		4 => { // SYS_RM_CHAR
-			framebuffer::FB_WRITER.lock().rm_char();
+			if crate::SYSTEM_INITIALIZED.load(core::sync::atomic::Ordering::SeqCst) {
+				let executor = unsafe { &mut *multitasking::EXECUTOR_PTR };
+
+				if let Some(task_id) = executor.current_task {
+				    let task = executor.tasks.get(&task_id).unwrap();
+
+				    if let Some(term_id) = task.terminal_id {
+				        let mut writer = framebuffer::TerminalWriter { terminal_id: term_id };
+				        writer.rm_char();
+				    }
+				}	
+			}
+			else {
+				framebuffer::FB_WRITER.lock().rm_char();
+			}
 			ret = 0;
 		}
 		5 => { // SYS_SPAWN
@@ -424,12 +438,26 @@ pub fn _syscall_handler(number: u64, arg1: u64, arg2: u64, arg3: u64, arg4: u64)
 			if let Ok(text) = core::str::from_utf8(s) {
 				let fs = unsafe { &mut *fat32::FS_PTR };
 				let data = fs.read_file(text).unwrap();
-				unsafe { multitasking::EXECUTOR_PTR.as_mut().unwrap().spawn(multitasking::Task::new(run_programm(data))) };
+				unsafe { multitasking::EXECUTOR_PTR.as_mut().unwrap().spawn(multitasking::Task::new(run_programm(data), Some(5))) };
 			}
 			ret = 0;
 		}
 		18 => { // SYS_CLEAR
-			framebuffer::FB_WRITER.lock().clear();
+			if crate::SYSTEM_INITIALIZED.load(core::sync::atomic::Ordering::SeqCst) {
+				let executor = unsafe { &mut *multitasking::EXECUTOR_PTR };
+
+				if let Some(task_id) = executor.current_task {
+				    let task = executor.tasks.get(&task_id).unwrap();
+
+				    if let Some(term_id) = task.terminal_id {
+				        let mut writer = framebuffer::TerminalWriter { terminal_id: term_id };
+				        writer.clear();
+				    }
+				}
+			}
+			else {
+				framebuffer::FB_WRITER.lock().clear();	
+			}
 			ret = 0;
 		}	
 		_ => {

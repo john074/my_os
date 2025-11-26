@@ -2,6 +2,7 @@ use multiboot2::{ BootInformation, BootInformationHeader };
 use core::fmt::{self, Write};
 use spin::Mutex;
 use lazy_static::lazy_static;
+use alloc::string::String;
 
 use crate::mouse;
 use crate::multitasking;
@@ -373,6 +374,73 @@ impl Write for FramebufferWriter {
 unsafe impl Send for FramebufferWriter {}
 unsafe impl Sync for FramebufferWriter {}
 
+pub struct TerminalWriter {
+    pub terminal_id: gui::NodeId,
+}
+
+impl Write for TerminalWriter {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        let gui = unsafe { &mut *gui::GUI_PTR };
+        let term_node = &mut gui.nodes[self.terminal_id];
+
+        let term = match &mut term_node.element {
+            gui::GuiElement::Terminal(t) => t,
+            _ => return Ok(()),
+        };
+
+        for c in s.chars() {
+            match c {
+                '\n' => {
+                    term.buffer.push(String::new());
+                    term.cursor_x = 0;
+                    term.cursor_y += 1;
+                }
+                _ => {
+                    if term.buffer.is_empty() {
+                        term.buffer.push(String::new());
+                    }
+
+                    term.buffer.last_mut().unwrap().push(c);
+                    term.cursor_x += 1;
+                }
+            }
+        }
+
+        term_node.dirty = true;
+        Ok(())
+    }
+}
+
+impl TerminalWriter {
+    pub fn rm_char(&mut self) {
+        let gui = unsafe { &mut *gui::GUI_PTR };
+        let term_node = &mut gui.nodes[self.terminal_id];
+        
+        let term = match &mut term_node.element {
+            gui::GuiElement::Terminal(t) => t,
+            _ => return,
+        };
+
+        term.buffer.last_mut().unwrap().pop();
+        term.cursor_x -= 1;
+        term_node.dirty = true;
+    }
+
+    pub fn clear(&mut self) {
+        let gui = unsafe { &mut *gui::GUI_PTR };
+        let term_node = &mut gui.nodes[self.terminal_id];
+        
+        let term = match &mut term_node.element {
+            gui::GuiElement::Terminal(t) => t,
+            _ => return,
+        };
+
+        term.buffer.clear();
+        term_node.dirty = true;
+    }
+}
+
+
 #[derive(Copy, Clone)]
 pub struct DirtyRect {
     pub x: isize,
@@ -388,11 +456,26 @@ macro_rules! print {
         use x86_64::instructions::interrupts;
 
         interrupts::without_interrupts(|| {
-            let mut writer = $crate::framebuffer::FB_WRITER.lock();
+			if $crate::SYSTEM_INITIALIZED.load(core::sync::atomic::Ordering::SeqCst) {
+	            let executor = unsafe { &mut *$crate::multitasking::EXECUTOR_PTR };
+
+	            if let Some(task_id) = executor.current_task {
+	                let task = executor.tasks.get(&task_id).unwrap();
+
+	                if let Some(term_id) = task.terminal_id {
+	                    let mut writer = $crate::framebuffer::TerminalWriter { terminal_id: term_id };
+	                    writer.write_fmt(format_args!($($arg)*)).unwrap();
+	                    return;
+	                }
+	            }
+	        }
+
+           	let mut writer = $crate::framebuffer::FB_WRITER.lock();
             writer.write_fmt(format_args!($($arg)*)).unwrap();
         });
     });
 }
+
 
 #[macro_export]
 macro_rules! println {

@@ -11,7 +11,7 @@ use alloc::string::{ ToString, String };
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() {
-    let mut task = multitasking::Task::new(user_main());
+    let mut task = multitasking::Task::new(user_main(), Some(5));
     syscall::spawn_task((&mut task as *mut multitasking::Task) as u64);
     exit();
 }

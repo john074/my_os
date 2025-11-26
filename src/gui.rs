@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use crate::framebuffer;
 use crate::mouse;
+use alloc::string::String;
 
 pub static mut GUI_PTR: *mut GuiSystem = core::ptr::null_mut();
 
@@ -10,6 +11,7 @@ pub enum GuiElement {
 	Desktop(DesktopData),
     Window(WindowData),
     Button(ButtonData),
+    Terminal(TerminalData),
     Dead,
 }
 
@@ -90,6 +92,7 @@ impl GuiSystem {
 	        match element {
 	            GuiElement::Window(w) => draw_window(ax, ay, self.nodes[id].width, self.nodes[id].height, w, fb),
 	            GuiElement::Button(b) => draw_button(ax, ay, self.nodes[id].width, self.nodes[id].height, b, fb),
+	            GuiElement::Terminal(t) => draw_terminal(ax, ay, self.nodes[id].width, self.nodes[id].height, t, fb),
 	            GuiElement::Desktop(_) => {}
 	            GuiElement::Dead => {}
 	        }
@@ -265,6 +268,13 @@ impl ButtonData {
     }
 }
 
+pub struct TerminalData {
+    pub buffer: Vec<String>,
+    pub cursor_x: usize,
+    pub cursor_y: usize,
+    pub text_color: u32,
+}
+
 // WINDOW HELP FUNCTIONS
 
 fn button_maximize(id: NodeId, gui: &mut GuiSystem) {
@@ -409,6 +419,20 @@ pub fn draw_button(x: isize, y: isize, w: isize, h:isize, b:&ButtonData, fb: &mu
         fb.draw_string(x + 6, y + 1, b.text, 0x000000);
     }
 }
+
+fn draw_terminal(x: isize, y: isize, w: isize, h: isize, term: &TerminalData, fb: &mut framebuffer::Framebuffer) {
+    fb.fill_rect(x, y, w, h, 0x000000);
+
+    let mut cy = y;
+    for line in &term.buffer {
+        fb.draw_string(x + 2, cy, line, term.text_color);
+        cy += 16;
+        if cy >= y + h {
+            break;
+        }
+    }
+}
+
 
 // MOUSE HADLING
 

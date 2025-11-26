@@ -6,6 +6,8 @@ use crate::std::syscall;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TaskId(pub u64);
 
+pub type NodeId = usize;
+
 impl TaskId {
 	pub fn new() -> Self {
 		TaskId(syscall::get_task_id())
@@ -14,14 +16,16 @@ impl TaskId {
 
 pub struct Task {
 	pub id: TaskId,
-	future: Pin<Box<dyn Future<Output = ()>>>
+	pub future: Pin<Box<dyn Future<Output = ()>>>,
+	pub terminal_id: Option<NodeId>,
 }
 
 impl Task {
-	pub fn new(future: impl Future<Output = ()> + 'static) -> Task {
+	pub fn new(future: impl Future<Output = ()> + 'static, terminal_id: Option<NodeId>) -> Task {
 		Task {
 			id: TaskId::new(),
 			future: Box::pin(future),
+			terminal_id,
 		}
 	}
 

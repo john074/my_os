@@ -8,6 +8,7 @@ use alloc::task::Wake;
 use crossbeam_queue::ArrayQueue;
 
 use crate::cpu;
+use crate::gui;
 
 pub static mut EXECUTOR_PTR: *mut Executor = core::ptr::null_mut();
 
@@ -23,14 +24,16 @@ impl TaskId {
 
 pub struct Task {
 	pub id: TaskId,
-	future: Pin<Box<dyn Future<Output = ()>>>
+	pub future: Pin<Box<dyn Future<Output = ()>>>,
+	pub terminal_id: Option<gui::NodeId>,
 }
 
 impl Task {
-	pub fn new(future: impl Future<Output = ()> + 'static) -> Task {
+	pub fn new(future: impl Future<Output = ()> + 'static, terminal_id: Option<gui::NodeId>) -> Task {
 		Task {
 			id: TaskId::new(),
 			future: Box::pin(future),
+			terminal_id,
 		}
 	}
 
@@ -93,6 +96,7 @@ impl Executor {
 	}
 
 	pub fn run(&mut self) -> ! {
+		crate::SYSTEM_INITIALIZED.store(true, core::sync::atomic::Ordering::SeqCst);
 		loop {
 			self.run_ready_tasks();
 			self.sleep_if_idle();

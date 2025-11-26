@@ -7,6 +7,8 @@
 
 use core::panic::PanicInfo;
 use alloc::boxed::Box; 
+use alloc::vec::Vec;
+use core::sync::atomic::AtomicBool;
 
 mod vga_buffer;
 mod interrupts;
@@ -28,6 +30,8 @@ mod gui;
 extern crate bitflags;
 #[macro_use]
 extern crate alloc;
+
+pub static SYSTEM_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 #[allow(static_mut_refs)]
 #[unsafe(no_mangle)]
@@ -74,10 +78,25 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	unsafe {
 	    multitasking::EXECUTOR_PTR = Box::into_raw(executor);
 	    fat32::FS_PTR = &mut fs as *mut fat32::FAT32Volume;
-		(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(framebuffer::gui_loop()));
-		(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(draw_window()));
-	    //(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(start_shell()));
-	   	(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(keyboard::print_keypresses()));
+		(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(framebuffer::gui_loop(), None));
+
+		let gui = &mut *gui::GUI_PTR;
+		let win = gui.create_window("Terminal", 50, 50, 400, 400);
+
+		let term = gui.add_node(
+		    win,
+		    gui::GuiElement::Terminal(gui::TerminalData {
+		        buffer: Vec::new(),
+		        cursor_x: 0,
+		        cursor_y: 0,
+		        text_color: 0xFFFFFF,
+		    }),
+		    2, 24, 380, 360
+		);
+
+		(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(draw_window(), None));
+	    (*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(start_shell(), Some(term)));
+	   	(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(keyboard::print_keypresses(), None));
 	    (*multitasking::EXECUTOR_PTR).run();
 	}
 }
@@ -90,7 +109,6 @@ async fn start_shell() {
 
 async fn draw_window() {
 	let gui = unsafe { &mut *gui::GUI_PTR };
-	gui.create_window("My window", 50, 50, 200, 150);
 	gui.create_window("My window2", 450, 50, 200, 150);
 }
 
