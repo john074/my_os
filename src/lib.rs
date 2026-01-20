@@ -70,6 +70,9 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	let mut fs = fat32::mount_fat32(boxed_ata).unwrap();
 	framebuffer.draw_frame();
 
+	framebuffer.fill_screen(framebuffer::BLACK);
+	framebuffer::run();
+
 	framebuffer::draw_background();
 
 	let mut gui = gui::GuiSystem::new(framebuffer.width as isize, framebuffer.height as isize);
@@ -94,6 +97,8 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 		    2, 24, 380, 360
 		);
 
+		gui.create_home();
+
 		(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(draw_window(), None));
 	    (*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(start_shell(), Some(term)));
 	   	(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(keyboard::print_keypresses(), None));
@@ -109,7 +114,7 @@ async fn start_shell() {
 
 async fn draw_window() {
 	let gui = unsafe { &mut *gui::GUI_PTR };
-	gui.create_window("My window2", 450, 50, 200, 150);
+	gui.create_window("My window", 450, 50, 200, 150);
 }
 
 pub fn hlt_loop() -> ! {

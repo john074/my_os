@@ -544,6 +544,8 @@ pub fn draw_background() {
 	fb.fill_rect(554, 380, 20, 50, WHITE);
 	fb.fill_rect(494, 410, 60, 20, WHITE);
 
+	fb.fill_rect(0, 734, 1023, 33, 0xC0C0C0);
+
 	unsafe {
 	    let src = fb.double_buf.as_ptr();
 	    let dst = fb.wallpaper_buf.as_mut_ptr();

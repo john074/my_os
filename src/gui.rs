@@ -129,6 +129,10 @@ impl GuiSystem {
         win_id
 	}
 
+	pub fn create_home(&mut self){
+		 self.add_node(self.root, GuiElement::Button(ButtonData::new("HOME", None)), 5, 738, 100, 26);
+	}
+
     pub fn hit_test(&self, id: NodeId, x: isize, y: isize) -> Option<NodeId> {
          let node = &self.nodes[id];
 
