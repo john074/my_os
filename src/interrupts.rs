@@ -1,4 +1,5 @@
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode};
+use core::sync::atomic::{ Ordering };
 use lazy_static::lazy_static;
 use pic8259::ChainedPics;
 use alloc::vec::Vec;
@@ -13,9 +14,9 @@ use crate::keyboard;
 use crate::fat32;
 use crate::multitasking;
 use crate::memory;
-use crate::vga_buffer;
 use crate::framebuffer;
 use crate::mouse;
+use crate::time;
 
 pub const PIC_1_OFFSET: u8 = 32;
 pub const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
@@ -145,7 +146,16 @@ pub extern "x86-interrupt" fn mouse_handler(_stack_frame: InterruptStackFrame) {
 }
 
 extern "x86-interrupt" fn timer_interrupt_handler(_stack_frame: InterruptStackFrame) {
+    let ticks = time::TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+
 	unsafe {
+		if ticks % time::TICKS_PER_SEC == 0 {
+		    time::increment_one_second();
+		}
+	
+		if ticks % time::TICKS_PER_MIN == 0 {
+			time::resync_from_cmos();
+		}
 		PICS.lock().notify_end_of_interrupt(InterruptIndex::Timer.as_u8());
 	}
 }

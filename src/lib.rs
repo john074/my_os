@@ -52,6 +52,8 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	unsafe { mouse::MOUSE_PTR = &mut mouse as *mut mouse::Mouse; }
 	framebuffer.draw_frame();
 
+	unsafe { time::init(); }
+
 	interrupts::init();
 	framebuffer.draw_frame();
 	
@@ -69,9 +71,6 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	framebuffer.draw_frame();
 	let mut fs = fat32::mount_fat32(boxed_ata).unwrap();
 	framebuffer.draw_frame();
-
-	framebuffer.fill_screen(framebuffer::BLACK);
-	framebuffer::run();
 
 	framebuffer::draw_background();
 
