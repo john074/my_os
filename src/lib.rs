@@ -25,6 +25,9 @@ mod framebuffer;
 mod mouse;
 mod fonts;
 mod gui;
+mod tdg;
+mod pci;
+mod network;
 
 #[macro_use]
 extern crate bitflags;
@@ -73,9 +76,13 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 	framebuffer.draw_frame();
 
 	framebuffer::draw_background();
+	//tdg::mk_bg();
+	//tdg::run();
 
 	let mut gui = gui::GuiSystem::new(framebuffer.width as isize, framebuffer.height as isize);
 	unsafe { gui::GUI_PTR = &mut gui as *mut gui::GuiSystem }
+
+	let net_driver = network::E1000::init_from_pci();
 	
 	unsafe {
 	    multitasking::EXECUTOR_PTR = Box::into_raw(executor);
@@ -96,10 +103,11 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 		    2, 24, 380, 360
 		);
 
-		gui.create_home();
+		gui.create_taskbar();
 
-		(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(draw_window(), None));
+		//(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(draw_window(), None));
 	    (*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(start_shell(), Some(term)));
+	    (*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(network_task(net_driver), Some(term)));
 	   	(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(keyboard::print_keypresses(), None));
 	    (*multitasking::EXECUTOR_PTR).run();
 	}
@@ -109,6 +117,15 @@ async fn start_shell() {
 	let fs = unsafe { &mut *fat32::FS_PTR };
 	let data = fs.read_file("/SOMNIA").unwrap();	
 	fat32::load_elf_and_jump(&data);
+}
+
+async fn network_task(mut nic: network::E1000) {
+    loop {
+        if let Some(_) = nic.recv() {
+            println!("Packet recieved!");
+        }
+        multitasking::cooperate().await
+    }
 }
 
 async fn draw_window() {
@@ -124,7 +141,7 @@ pub fn hlt_loop() -> ! {
 
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-	vga_buffer::WRITER.lock().set_foreground_color(vga_buffer::Color::Red);
+	//vga_buffer::WRITER.lock().set_foreground_color(vga_buffer::Color::Red);
 	println!("{}", _info);
 	hlt_loop();
 }

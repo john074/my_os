@@ -669,18 +669,17 @@ pub fn remap_kernel<A>(allocator: &mut A, boot_info: &BootInformation) -> Active
 			}
 		}
 
-		// Получаем физический адрес и параметры
+		// Framebuffer
+		// Getting fb data
 		let fb_tag = boot_info.framebuffer_tag().expect("Framebuffer tag missing").unwrap();
 		let fb_addr = fb_tag.address();
-		let width = fb_tag.width() as usize;
 		let height = fb_tag.height() as usize;
 		let pitch = fb_tag.pitch() as usize;
-		let bpp = fb_tag.bpp() as usize;
 			    
-		// Размер фреймбуфера в байтах
+		// Framebuffer size in bytes
 		let fb_size = pitch * height;
 			    
-		// Для простоты округлим до границ страниц
+		// Rounding to pages boundaries for simpclicity
 		let fb_start_frame = Frame::containing_address((fb_addr & !0xFFF) as usize);
 		let fb_end_frame = Frame::containing_address(((fb_addr + fb_size as u64 + 0xFFF) & !0xFFF) as usize);
 			    
@@ -688,15 +687,22 @@ pub fn remap_kernel<A>(allocator: &mut A, boot_info: &BootInformation) -> Active
         	mapper.identity_map(frame, WRITABLE, allocator);
 		}
 
+		// MMIO
+		let mmio_addr = 0xFEBC0000u64;
+		let region_size = 128 * 1024; // 128 Kb
+
+		let mmio_start_frame = Frame::containing_address((mmio_addr & !0xFFF) as usize);
+		let mmio_end_frame = Frame::containing_address(((mmio_addr + region_size as u64 + 0xFFF) & !0xFFF) as usize);
+
+		for frame in Frame::range_inclusive(mmio_start_frame, mmio_end_frame) {
+		    mapper.identity_map(frame, WRITABLE, allocator);
+		}
+
+		// VGA buffer
 		let vga_buffer_frame = Frame::containing_address(0xb8000);
 		mapper.identity_map(vga_buffer_frame, WRITABLE, allocator);
 
-		// let fb_tag = boot_info.framebuffer_tag().expect("Framebuffer tag missing").unwrap();
-		// let fb_addr = fb_tag.address() as usize;
-		// 
-		// let frame_buffer_frame = Frame::containing_address(fb_addr);
-		// mapper.identity_map(frame_buffer_frame, WRITABLE, allocator);
-
+		// Multiboot
 		let multiboot_start = Frame::containing_address(boot_info.start_address());
 		let multiboot_end = Frame::containing_address(boot_info.end_address() - 1);
 		for frame in Frame::range_inclusive(multiboot_start, multiboot_end) {

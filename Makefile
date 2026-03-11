@@ -50,6 +50,8 @@ run:
   -vga std \
   -serial stdio \
   -machine pc \
+  -device e1000,netdev=n1 \
+  -netdev tap,id=n1,ifname=tap0,script=no,downscript=no \
   -s
   #-D qemu.log -d int,cpu,exec \
 	    

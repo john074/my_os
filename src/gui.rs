@@ -1,6 +1,7 @@
 use alloc::vec::Vec;
 use crate::framebuffer;
 use crate::mouse;
+use crate::time;
 use alloc::string::String;
 
 pub static mut GUI_PTR: *mut GuiSystem = core::ptr::null_mut();
@@ -12,6 +13,7 @@ pub enum GuiElement {
     Window(WindowData),
     Button(ButtonData),
     Terminal(TerminalData),
+    Taskbar(TaskbarData),
     Dead,
 }
 
@@ -93,6 +95,7 @@ impl GuiSystem {
 	            GuiElement::Window(w) => draw_window(ax, ay, self.nodes[id].width, self.nodes[id].height, w, fb),
 	            GuiElement::Button(b) => draw_button(ax, ay, self.nodes[id].width, self.nodes[id].height, b, fb),
 	            GuiElement::Terminal(t) => draw_terminal(ax, ay, self.nodes[id].width, self.nodes[id].height, t, fb),
+				GuiElement::Taskbar(tb) => draw_taskbar(tb, fb),
 	            GuiElement::Desktop(_) => {}
 	            GuiElement::Dead => {}
 	        }
@@ -129,8 +132,13 @@ impl GuiSystem {
         win_id
 	}
 
-	pub fn create_home(&mut self){
+	pub fn create_home(&mut self) {
 		 self.add_node(self.root, GuiElement::Button(ButtonData::new("HOME", None)), 5, 738, 100, 26);
+	}
+
+	pub fn create_taskbar(&mut self) {
+		self.add_node(self.root, GuiElement::Taskbar(TaskbarData {}), 0, 734, 1023, 33);
+		self.create_home();
 	}
 
     pub fn hit_test(&self, id: NodeId, x: isize, y: isize) -> Option<NodeId> {
@@ -237,9 +245,8 @@ impl GuiSystem {
 }
 
 // DATA STRUCTS
-
-pub struct DesktopData {
-}
+pub struct DesktopData {}
+pub struct TaskbarData {}
 
 pub struct WindowData {
     pub title: &'static str,
@@ -410,6 +417,14 @@ fn draw_window(x: isize, y: isize, w: isize, h: isize, data: &WindowData, fb: &m
     let title_h = 24;
     fb.fill_rect(x + 1, y + 1, w - 2, title_h, WIN95_TITLE_BAR); // title
     fb.draw_string(x + 5, y + 5, data.title, WIN95_TITLE_TEXT); // title text
+}
+
+#[allow(static_mut_refs)]
+fn draw_taskbar(data: &TaskbarData, fb: &mut framebuffer::Framebuffer) {
+    fb.fill_rect(0, 734, 1023, 33, 0xC0C0C0);
+    unsafe {
+    	fb.draw_string(860, 742, &format!("{}/{}/{} {}:{}", time::YEAR, time::MONTH, time::DAY, time::HOURS, time::MINUTES), framebuffer::BLACK);
+    }
 }
 
 pub fn draw_button(x: isize, y: isize, w: isize, h:isize, b:&ButtonData, fb: &mut framebuffer::Framebuffer) {

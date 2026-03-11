@@ -1,3 +1,5 @@
+use crate::framebuffer;
+
 // DA CUBE
 const SCALE: isize = 256;
 const FP: isize = 1024;
@@ -382,8 +384,8 @@ pub unsafe fn frame(angle: &mut f32) {
     let dz = 1024;
 
     unsafe {
-        let fb = FRAMEBUFFER.as_mut().unwrap();
-        fb.blit_rect_from_wallpaper((fb.width/4) as isize, (fb.height/4-30) as isize, fb.width/3+60, fb.height/3+60);
+        let fb = framebuffer::FRAMEBUFFER.as_mut().unwrap();
+        fb.blit_rect_from_wallpaper((fb.width/4) as isize, (fb.height/4-30) as isize, fb.width/3+80, fb.height/3+80);
         //fb.blit_rect_from_wallpaper(1_isize, 1_isize, fb.width-2, fb.height-2)
     }
 
@@ -402,20 +404,20 @@ pub unsafe fn frame(angle: &mut f32) {
         let b = screen(project(b));
 
         unsafe {
-            let fb = FRAMEBUFFER.as_mut().unwrap();
-            fb.draw_line(a.x, a.y, b.x, b.y, GREEN);
+            let fb =framebuffer::FRAMEBUFFER.as_mut().unwrap();
+            fb.draw_line(a.x, a.y, b.x, b.y, framebuffer::GREEN);
         }
     }
 
     unsafe {
-        FRAMEBUFFER.as_mut().unwrap().draw_frame();
+        framebuffer::FRAMEBUFFER.as_mut().unwrap().draw_frame();
     }
 }
 
 #[allow(static_mut_refs)]
 pub fn mk_bg() {
-	let fb = unsafe{ FRAMEBUFFER.as_mut().unwrap() };
-	fb.fill_screen(BLACK);
+	let fb = unsafe{ framebuffer::FRAMEBUFFER.as_mut().unwrap() };
+	fb.fill_screen(framebuffer::BLACK);
 
 	unsafe {
 	    let src = fb.double_buf.as_ptr();

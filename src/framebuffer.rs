@@ -41,8 +41,8 @@ pub struct Framebuffer {
     pub height: usize,
     pub pitch: usize,
     pub bpp: usize,
-    double_buf: &'static mut [u8],
-    wallpaper_buf: &'static mut [u8],
+    pub double_buf: &'static mut [u8],
+    pub wallpaper_buf: &'static mut [u8],
     font: fonts::Font,
     dirty: [Option<DirtyRect>; MAX_DIRTY],
     dirty_count: usize,
@@ -543,8 +543,6 @@ pub fn draw_background() {
 	fb.fill_rect(514, 360, 60, 20, WHITE);
 	fb.fill_rect(554, 380, 20, 50, WHITE);
 	fb.fill_rect(494, 410, 60, 20, WHITE);
-
-	fb.fill_rect(0, 734, 1023, 33, 0xC0C0C0);
 
 	unsafe {
 	    let src = fb.double_buf.as_ptr();
