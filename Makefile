@@ -107,7 +107,7 @@ run:
 		-vga std \
 		-serial stdio \
 		-machine pc \
-		-device e1000,netdev=n1 \
+		-device e1000,netdev=n1,mac=52:54:00:12:34:01 \
 		-netdev tap,id=n1,ifname=tap0,script=no,downscript=no &
 		#-D qemu.log -d int,cpu,exec \
 
@@ -119,7 +119,7 @@ net_run:
 		-vga std \
 		-serial stdio \
 		-machine pc \
-		-device e1000,netdev=n1 \
+		-device e1000,netdev=n1,mac=52:54:00:12:34:02 \
 		-netdev tap,id=n1,ifname=tap1,script=no,downscript=no &
 		#-D qemu.log -d int,cpu,exec \
 

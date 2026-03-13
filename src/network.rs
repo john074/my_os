@@ -3,12 +3,15 @@ use crate::println;
 
 pub const ETH_TYPE_IPV4: u16 = 0x0800;
 pub const ETH_TYPE_ARP: u16 = 0x0806;
+pub const ETH_HDR_LEN: usize = 14;
+pub const IPV4_HDR_LEN: usize = 20;
+pub const ARP_LEN: usize = 28;
 pub const IP_PROTO_ICMP: u8 = 1;
 pub const ICMP_ECHO_REQUEST: u8 = 8;
 pub const ICMP_ECHO_REPLY: u8 = 0;
+pub const ETH_BROADCAST: [u8;6] = [0xff;6];
 
 const REG_CTRL: u32 = 0x0000;
-const REG_STATUS: u32 = 0x0008;
 const REG_RCTL: u32 = 0x0100;
 const REG_TCTL: u32 = 0x0400;
 const REG_RDBAL: u32 = 0x2800;
@@ -35,6 +38,8 @@ static mut TX_DESC: [TxDesc; TX_RING] = [TxDesc { addr:0, length:0, cso:0, cmd:0
 static mut RX_BUF: [[u8; RX_BUFFER_SIZE]; RX_RING] = [[0; RX_BUFFER_SIZE]; RX_RING];
 static mut TX_BUF: [[u8; RX_BUFFER_SIZE]; TX_RING] = [[0; RX_BUFFER_SIZE]; TX_RING];
 
+pub static mut NIC_PTR: *mut E1000 = core::ptr::null_mut();
+
 #[repr(C, align(16))]
 #[derive(Copy, Clone)]
 pub struct RxDesc {
@@ -59,6 +64,7 @@ pub struct TxDesc {
 }
 
 #[repr(C, packed)]
+#[derive(Clone, Copy)]
 pub struct IcmpEcho {
     pub icmp_type: u8,
     pub code: u8,
@@ -68,7 +74,8 @@ pub struct IcmpEcho {
 }
 
 #[repr(C, packed)]
-struct ArpPacket {
+#[derive(Clone, Copy)]
+pub struct ArpPacket {
     htype: u16,
     ptype: u16,
     hlen: u8,
@@ -78,6 +85,28 @@ struct ArpPacket {
     spa: [u8;4],
     tha: [u8;6],
     tpa: [u8;4],
+}
+
+#[repr(C, packed)]
+#[derive(Clone, Copy)]
+pub struct Ipv4Header {
+    vihl: u8,
+    tos: u8,
+    len: u16,
+    id: u16,
+    frag: u16,
+    ttl: u8,
+    proto: u8,
+    checksum: u16,
+    src: [u8;4],
+    dst: [u8;4],
+}
+
+#[repr(C, packed)]
+pub struct EthernetHeader {
+    pub dst: [u8;6],
+    pub src: [u8;6],
+    pub ethertype: u16,
 }
 
 pub struct E1000 {
@@ -161,7 +190,6 @@ impl E1000 {
 	    self.write(REG_TCTL, tctl);
 	}
 	
-	//#[allow(static_mut_refs)]
 	pub fn send(&mut self, data: &[u8]) {
 	    let i = self.tx_tail;
 	    self.tx_buf[i][..data.len()].copy_from_slice(data);
@@ -182,16 +210,6 @@ impl E1000 {
 	    self.tx_desc[i].status = 0;
 	    self.tx_tail = (self.tx_tail + 1) % TX_RING;
 	    self.write(REG_TDT, self.tx_tail as u32);
-	    
-	    // println!("TDH {:x}", self.read(REG_TDH));
-	    // println!("TDT {:x}", self.read(REG_TDT));
-	    // println!("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
-	    // 	self.mac[0],self.mac[1],self.mac[2],self.mac[3],self.mac[4],self.mac[5]);
-	    // println!("TCTL {:x}", self.read(REG_TCTL));
-	    // println!("STATUS {:x}", self.read(0x0008));
-	    // println!("-111");
-	    // let framebuffer = unsafe { framebuffer::FRAMEBUFFER.as_mut().unwrap() };
-	    // framebuffer.draw_frame();
 	}
 
 	pub fn recv(&mut self) -> Option<&[u8]> {
@@ -247,15 +265,14 @@ impl E1000 {
 
 pub fn checksum(data: &[u8]) -> u16 {
     let mut sum: u32 = 0;
-    let mut i = 0;
-    while i + 1 < data.len() {
-        let word = ((data[i] as u16) << 8) | data[i+1] as u16;
-        sum += word as u32;
-        i += 2;
-    }
+    for chunk in data.chunks(2) {
+        let word = if chunk.len() == 2 {
+            u16::from_be_bytes([chunk[0], chunk[1]])
+        } else {
+            (chunk[0] as u16) << 8
+        };
 
-    if i < data.len() {
-        sum += (data[i] as u32) << 8;
+        sum += word as u32;
     }
 
     while (sum >> 16) != 0 {
@@ -275,11 +292,11 @@ pub fn build_icmp_request(seq: u16, buf: &mut [u8]) -> usize {
     };
 
     let hdr_bytes = unsafe { core::slice::from_raw_parts(&hdr as *const _ as *const u8, core::mem::size_of::<IcmpEcho>()) };
-
     buf[..hdr_bytes.len()].copy_from_slice(hdr_bytes);
-    let data = b"hello";
 
+    let data = b"hello";
     buf[hdr_bytes.len()..hdr_bytes.len()+data.len()].copy_from_slice(data);
+    
     let len = hdr_bytes.len() + data.len();
     let sum = checksum(&buf[..len]);
     buf[2..4].copy_from_slice(&sum.to_be_bytes());
@@ -287,17 +304,36 @@ pub fn build_icmp_request(seq: u16, buf: &mut [u8]) -> usize {
     len
 }
 
+pub fn send_arp(nic: &mut E1000, op: u16, target_mac: [u8;6], target_ip: [u8;4]) {
+    let mut buf = [0u8; 64];
+
+    write_eth_header(&mut buf, target_mac, nic.mac, ETH_TYPE_ARP);
+
+    let arp = ArpPacket {
+        htype: 1u16.to_be(),
+        ptype: ETH_TYPE_IPV4.to_be(),
+        hlen: 6,
+        plen: 4,
+        oper: op.to_be(),
+        sha: nic.mac,
+        spa: nic.ip,
+        tha: target_mac,
+        tpa: target_ip,
+    };
+
+    let bytes = unsafe {
+        core::slice::from_raw_parts(&arp as *const _ as *const u8, ARP_LEN)
+    };
+
+    buf[ETH_HDR_LEN..ETH_HDR_LEN + ARP_LEN].copy_from_slice(bytes);
+    nic.send(&buf[..(ETH_HDR_LEN + ARP_LEN)]);
+}
+
 pub fn ping(nic: &mut E1000, target_ip: [u8;4]) {
     if let Some(target_mac) = resolve(nic, target_ip) {
 	    let seq = 1;
 	  
 	    send_ping(nic, target_ip, target_mac, seq);
-	    if wait_ping_reply(nic, seq) {
-	        println!("ping reply received");
-	    } 
-	    else {
-	        println!("timeout");
-	    }
     }
  	else {
  		println!("target not found");
@@ -305,126 +341,81 @@ pub fn ping(nic: &mut E1000, target_ip: [u8;4]) {
 }
 
 pub fn send_ping(nic: &mut E1000, dst_ip: [u8;4], dst_mac: [u8;6], seq: u16) {
-    let mut icmp = [0u8;64];
+    let mut icmp = [0u8; 64];
     let icmp_len = build_icmp_request(seq, &mut icmp);
-    let mut frame = [0u8;128];
-    let eth_len = build_ipv4_frame(
-    		nic,
-            frame.as_mut_slice(),
-            nic.read_mac(),
-            dst_mac,
-            dst_ip,
-            IP_PROTO_ICMP,
-            &icmp[..icmp_len],
-        );
-        
-    nic.send(&frame[..eth_len]);
+
+    let mut frame = [0u8; 128];
+
+    let len = build_ipv4_packet(
+        nic,
+        &mut frame,
+        dst_mac,
+        dst_ip,
+        IP_PROTO_ICMP,
+        &icmp[..icmp_len],
+    );
+
+	println!("PING to {:?}", dst_ip);
+    nic.send(&frame[..len]);
 }
 
-pub fn wait_ping_reply(nic: &mut E1000, seq: u16) -> bool {
-    for _ in  0..100000 {
-        if let Some(pkt) = nic.recv() {
-            if let Some(reply_seq) = parse_echo_reply(pkt) {
-                if reply_seq == seq {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
+pub fn build_ipv4_packet(nic: &E1000, buf: &mut [u8], dst_mac: [u8;6], dst_ip: [u8;4], proto: u8, payload: &[u8]) -> usize {
+    write_eth_header(buf, dst_mac, nic.mac, ETH_TYPE_IPV4);
 
-pub fn build_ipv4_frame(nic: &mut E1000, buf: &mut [u8], src_mac: [u8;6], dst_mac: [u8;6], dst_ip: [u8;4], proto: u8, payload: &[u8]) -> usize {
-    let src_ip = nic.ip;
+    let ip = Ipv4Header {
+        vihl: 0x45,
+        tos: 0,
+        len: (IPV4_HDR_LEN + payload.len()) as u16,
+        id: 0,
+        frag: 0,
+        ttl: 64,
+        proto,
+        checksum: 0,
+        src: nic.ip,
+        dst: dst_ip,
+    };
 
-    // ethernet
-    buf[0..6].copy_from_slice(&dst_mac);
-    buf[6..12].copy_from_slice(&src_mac);
-    buf[12..14].copy_from_slice(&0x0800u16.to_be_bytes());
+    let ip_bytes = unsafe {
+        core::slice::from_raw_parts(&ip as *const _ as *const u8, IPV4_HDR_LEN)
+    };
+
+    let ip_start = ETH_HDR_LEN;
+    buf[ip_start..ip_start + IPV4_HDR_LEN].copy_from_slice(ip_bytes);
     
-    let ip = &mut buf[14..];
-    ip[0] = 0x45;
-    ip[1] = 0;
+    let csum = checksum(&buf[ip_start..ip_start + IPV4_HDR_LEN]);
+    buf[ip_start + 10..ip_start + 12].copy_from_slice(&csum.to_be_bytes());
     
-    let total_len = (20 + payload.len()) as u16;
-    ip[2..4].copy_from_slice(&total_len.to_be_bytes());
-    ip[4..6].copy_from_slice(&0u16.to_be_bytes());
-    ip[6..8].copy_from_slice(&0u16.to_be_bytes());
+    let payload_start = ETH_HDR_LEN + IPV4_HDR_LEN;
+    buf[payload_start..payload_start + payload.len()].copy_from_slice(payload);
     
-    ip[8] = 64;
-    ip[9] = proto;
-    
-    ip[10..12].copy_from_slice(&0u16.to_be_bytes());
-    ip[12..16].copy_from_slice(&src_ip);
-    ip[16..20].copy_from_slice(&dst_ip);
-
-    let csum = checksum(&ip[..20]);
-    ip[10..12].copy_from_slice(&csum.to_be_bytes());
-    ip[20..20+payload.len()].copy_from_slice(payload);
-
-    14 + 20 + payload.len()
-}
-
-pub fn parse_echo_reply(pkt: &[u8]) -> Option<u16> {
-    if pkt.len() < 42 {
-        return None;
-    }
-
-    let ethertype = u16::from_be_bytes([pkt[12], pkt[13]]);
-    if ethertype != ETH_TYPE_IPV4 {
-        return None;
-    }
-
-    let ip = &pkt[14..];
-    if ip[9] != 1 {
-        return None;
-    }
-
-    let icmp = &ip[20..];
-    if icmp[0] != 0 {
-        return None;
-    }
-
-    let seq = u16::from_be_bytes([icmp[6], icmp[7]]);
-    Some(seq)
+    payload_start + payload.len()
 }
 
 pub fn resolve(nic: &mut E1000, target_ip: [u8;4]) -> Option<[u8;6]> {
-    let mut buf = [0u8; 64];
-    let my_ip = nic.ip;
-    let arp = ArpPacket {
-        htype: 1u16.to_be(),
-        ptype: 0x0800u16.to_be(),
-        hlen: 6,
-        plen: 4,
-        oper: 1u16.to_be(),
-        sha: nic.mac,
-        spa: my_ip,
-        tha: [0;6],
-        tpa: target_ip,
-    };
+    send_arp(nic, 1, ETH_BROADCAST, target_ip);
 
-    let arp_bytes = unsafe { core::slice::from_raw_parts(&arp as *const _ as *const u8, core::mem::size_of::<ArpPacket>()) };
-
-    buf[0..6].copy_from_slice(&[0xff;6]);
-    buf[6..12].copy_from_slice(&nic.read_mac());
-    buf[12..14].copy_from_slice(&0x0806u16.to_be_bytes());
-    buf[14..14+arp_bytes.len()].copy_from_slice(arp_bytes);
-
-    nic.send(&buf[..42]);
-
-    for _ in 0..100000 {
+    for _ in 0..10_000_000 {
         if let Some(pkt) = nic.recv() {
-            let ethertype = u16::from_be_bytes([pkt[12], pkt[13]]);
-            if ethertype != ETH_TYPE_ARP {
+            if pkt.len() < ETH_HDR_LEN + ARP_LEN {
                 continue;
             }
-			
-            let arp = unsafe { &*(pkt[14..].as_ptr() as *const ArpPacket) };
-            if arp.oper.to_be() != 2 {     	
+
+            if let Some(ethertype) = ethernet_type(pkt) {
+	            if ethertype != ETH_TYPE_ARP {
+	                continue;
+	            }
+	        } else {
+	        	continue;
+	        }
+
+            let arp = unsafe {
+                &*(pkt[ETH_HDR_LEN..].as_ptr() as *const ArpPacket)
+            };
+
+            if u16::from_be(arp.oper) != 2 {
                 continue;
             }
-			
+
             if arp.spa == target_ip {
                 return Some(arp.sha);
             }
@@ -432,6 +423,115 @@ pub fn resolve(nic: &mut E1000, target_ip: [u8;4]) -> Option<[u8;6]> {
     }
 
     None
+}
+
+pub fn handle_packet(nic: &mut E1000, pkt: &[u8]) {
+    if pkt.len() < 14 {
+        return;
+    }
+
+    if let Some(ethertype) = ethernet_type(pkt) {
+    	match ethertype {
+    	    ETH_TYPE_ARP => handle_arp(nic, pkt),
+    	    ETH_TYPE_IPV4 => handle_ipv4(nic, pkt),
+    	    _ => {}
+    	}	
+    }
+}
+
+fn handle_arp(nic: &mut E1000, pkt: &[u8]) {
+    if pkt.len() < 42 {
+        return;
+    }
+    
+    let arp = unsafe { &*(pkt[14..].as_ptr() as *const ArpPacket) };
+    if u16::from_be(arp.oper) != 1 {
+        return;
+    }
+
+    if arp.tpa != nic.ip {
+        return;
+    }
+
+    send_arp_reply(nic, arp);
+}
+
+pub fn send_arp_reply(nic: &mut E1000, req: &ArpPacket) {
+    send_arp(nic, 2, req.sha, req.spa);
+}
+
+fn handle_ipv4(nic: &mut E1000, pkt: &[u8]) {
+    if pkt.len() < ETH_HDR_LEN + IPV4_HDR_LEN {
+        return;
+    }
+
+    let ip = unsafe { &*(pkt[ETH_HDR_LEN..].as_ptr() as *const Ipv4Header) };
+    if ip.dst != nic.ip {
+        return;
+    }
+
+    if ip.proto == IP_PROTO_ICMP {
+        handle_icmp(nic, pkt, ip);
+    }
+}
+
+fn handle_icmp(nic: &mut E1000, pkt: &[u8], ip: &Ipv4Header) {
+    let icmp_start = ETH_HDR_LEN + ((ip.vihl & 0x0F) as usize * 4);
+    let icmp = &pkt[icmp_start..];
+
+    match icmp[0] {
+        ICMP_ECHO_REQUEST => send_icmp_reply(nic, pkt, ip),
+        ICMP_ECHO_REPLY => println!("PING reply from {:?}", ip.src),
+        _ => {}
+    }
+}
+
+pub fn send_icmp_reply(nic: &mut E1000, pkt: &[u8], ip: &Ipv4Header) {
+    let mut buf = [0u8;1500];
+
+    let len = pkt.len();
+    buf[..len].copy_from_slice(pkt);
+
+    write_eth_header(
+        &mut buf,
+        pkt[6..12].try_into().unwrap(),
+        nic.mac,
+        ETH_TYPE_IPV4
+    );
+
+    let ip_start = ETH_HDR_LEN;
+    buf[ip_start + 12..ip_start + 16].copy_from_slice(&nic.ip);
+    buf[ip_start + 16..ip_start + 20].copy_from_slice(&ip.src);
+    
+    let ihl = (ip.vihl & 0x0F) as usize * 4;
+    let icmp_start = ETH_HDR_LEN + ihl;
+    let icmp = &mut buf[icmp_start..len];
+
+    icmp[0] = ICMP_ECHO_REPLY;
+    icmp[2] = 0;
+    icmp[3] = 0;
+
+    let csum = checksum(icmp);
+    icmp[2..4].copy_from_slice(&csum.to_be_bytes());
+    nic.send(&buf[..len]);
+}
+
+pub fn write_eth_header(buf: &mut [u8], dst: [u8;6], src: [u8;6], ethertype: u16) {
+    let hdr = EthernetHeader { dst, src, ethertype: ethertype.to_be() };
+
+    let bytes = unsafe {
+        core::slice::from_raw_parts(&hdr as *const _ as *const u8, core::mem::size_of::<EthernetHeader>())
+    };
+
+    buf[..ETH_HDR_LEN].copy_from_slice(bytes);
+}
+
+pub fn ethernet_type(pkt: &[u8]) -> Option<u16> {
+    if pkt.len() < ETH_HDR_LEN {
+        return None;
+    }
+
+    Some(u16::from_be_bytes([pkt[12], pkt[13]]))
 }
 
 pub fn parse_ip(ip_str: &str) -> Option<[u8; 4]> {

@@ -84,12 +84,13 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 
 	let ip_bytes = fs.read_file("ip.txt").unwrap();
 	let ip_str = core::str::from_utf8(&ip_bytes[..ip_bytes.len() as usize]).unwrap_or("[invalid utf8]");
-	let net_driver;
+	let mut net_driver;
 	if let Some(ip) = network::parse_ip(ip_str) {
 		net_driver = network::E1000::init_from_pci(ip);
 	} else {
 		net_driver = network::E1000::init_from_pci([10,0,0,1]);
 	}
+	unsafe { network::NIC_PTR = &mut net_driver as *mut network::E1000 }
 	
 	unsafe {
 	    multitasking::EXECUTOR_PTR = Box::into_raw(executor);
@@ -114,11 +115,10 @@ pub extern "C" fn rust_main(multiboot_information_address: usize) -> ! {
 
 		//(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(draw_window(), None));
 	    (*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(start_shell(), Some(term)));
+	    (*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(network_task(&mut *network::NIC_PTR), Some(term)));
 	    if ip_str == "10.0.0.1\n" {
-	    	//(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(ping_task(net_driver), None));	
-	    } else {
-	    	//(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(network_task(net_driver), Some(term)));
-	    }
+	    	(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(ping_task(&mut *network::NIC_PTR), Some(term)));	
+		}
 	   	(*multitasking::EXECUTOR_PTR).spawn(multitasking::Task::new(keyboard::print_keypresses(), None));
 	    (*multitasking::EXECUTOR_PTR).run();
 	}
@@ -130,21 +130,23 @@ async fn start_shell() {
 	fat32::load_elf_and_jump(&data);
 }
 
-async fn network_task(mut nic: network::E1000) {
+async fn network_task(nic: &mut network::E1000) {
     loop {
-        if let Some(_) = nic.recv() {
-            println!("Packet recieved!");
+        if let Some(pkt) = nic.recv() { 
+        	let owned_pkt = pkt.to_vec();
+            network::handle_packet(nic, &owned_pkt); 
         }
         multitasking::cooperate().await
     }
 }
 
-async fn ping_task(mut nic: network::E1000) {
+async fn ping_task(nic: &mut network::E1000) {
     let target = [10,0,0,2];
     loop {
-        network::ping(&mut nic, target);
-        time::sleep(1000);
-        multitasking::cooperate().await
+        network::ping(nic, target);
+        for _ in 0..100 {
+        	multitasking::cooperate().await
+        }
     }
 }
 
